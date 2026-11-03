@@ -59,7 +59,7 @@ final class X6SearchSuppressor {
 
             if isSynthetic {
                 print(
-                    "[X6-FILTER] delivered synthetic Option " +
+                    "[X6-FILTER] delivered synthetic trigger " +
                     "type=\(type.rawValue) " +
                     "flags=0x\(String(event.flags.rawValue, radix: 16))"
                 )
@@ -73,7 +73,7 @@ final class X6SearchSuppressor {
             let isSearchKey =
                 (type == .keyDown || type == .keyUp) && keyCode == 0xB1
             let isSearchSystemEvent = type.rawValue == 14
-            let trigger = AppStorage.inputTriggerKey
+            let trigger = AppStorage.effectiveInputTriggerKey
             let isDelayedX6Trigger = type == .flagsChanged
                 && trigger.keyCodes.contains(keyCode)
             if isArmed && (
@@ -125,7 +125,7 @@ final class X6SearchSuppressor {
 
     func triggerConfigurationDidChange() {
         triggerKeysDown.removeAll()
-        print("[INPUT-TRIGGER] listening for \(AppStorage.inputTriggerKey.title)")
+        print("[INPUT-TRIGGER] listening for \(AppStorage.effectiveInputTriggerKey.title)")
     }
 
     func stop() {
@@ -143,18 +143,18 @@ final class X6SearchSuppressor {
         isSynthetic: Bool
     ) {
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-        // X6-generated Option events are handed to the coordinator directly
+        // X6-generated trigger events are handed to the coordinator directly
         // before posting. Observing them again here would execute the same
         // microphone transition twice.
         guard !isSynthetic else { return }
-        let trigger = AppStorage.inputTriggerKey
+        let trigger = AppStorage.effectiveInputTriggerKey
         guard trigger.keyCodes.contains(keyCode) else { return }
 
         // macOS normally reports modifier edges as `flagsChanged`, but on
         // some keyboards/input-method paths the DOWN edge arrives as a plain
         // `keyDown` while the release still arrives as `flagsChanged`. V1 only
-        // listened to flagsChanged, so Doubao opened but vRemote missed the
-        // transition and kept its audio route closed.
+        // listened to flagsChanged, so the input method opened but vRemote
+        // missed the transition and kept its audio route closed.
         let isDown: Bool
         switch type {
         case .keyDown:
@@ -162,7 +162,7 @@ final class X6SearchSuppressor {
         case .keyUp:
             isDown = false
         case .flagsChanged:
-            // When another Option key remains held, maskAlternate stays set
+            // When another key with the same modifier remains held, the aggregate flag stays set
             // even while this key is released. The per-key set is therefore
             // a more reliable release signal than the aggregate flag alone.
             if triggerKeysDown.contains(keyCode) {
@@ -170,7 +170,7 @@ final class X6SearchSuppressor {
             } else {
                 guard event.flags.contains(trigger.flag) else {
                     print(
-                        "[OPTION-RAW] orphan UP ignored keyCode=0x" +
+                        "[TRIGGER-RAW] orphan UP ignored keyCode=0x" +
                         String(keyCode, radix: 16)
                     )
                     return
@@ -182,7 +182,7 @@ final class X6SearchSuppressor {
         }
 
         print(
-            "[OPTION-RAW] type=\(type.rawValue) " +
+            "[TRIGGER-RAW] type=\(type.rawValue) " +
             "keyCode=0x\(String(keyCode, radix: 16)) " +
             "edge=\(isDown ? "DOWN" : "UP")"
         )

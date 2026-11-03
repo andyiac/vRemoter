@@ -2,15 +2,16 @@
 
 ## Product register
 
-vRemoter is a focused macOS utility for people who use Doubao Input Method
-with supported Bluetooth voice remotes. It combines the Mac microphone and
-remote microphone, translates the remote voice gesture into the same trigger
-configured in Doubao, and provides device-scoped button remapping.
+vRemoter is a focused macOS utility for people who use Doubao Input Method or
+WeChat Input Method with supported Bluetooth voice remotes. It combines the Mac
+microphone and remote microphone, translates the remote voice gesture into the
+selected input method's voice shortcut, and provides device-scoped button
+remapping.
 
 ## Core users and jobs
 
-- A Mac user who wants to start and stop Doubao voice input without reaching
-  for the keyboard.
+- A Mac user who wants to start and stop Doubao or WeChat voice input without
+  reaching for the keyboard.
 - A user with an X6 or Chromecast Voice Remote who wants TV-oriented buttons
   to perform useful Mac keyboard actions.
 - A user who may replace a remote with another unit of the same supported
@@ -33,8 +34,9 @@ an instrument panel rather than a playful remote-control skin.
 - Put button configuration on an adjacent, dedicated mapping surface.
 - Identify supported hardware by model profile, not a single unit's Bluetooth
   UUID. Show exact profile names and connection state.
-- Default the Doubao trigger to Option. Always remind users that the selected
-  key must match Doubao Input Method's voice-input setting.
+- Default the Doubao trigger to Option and the WeChat trigger to Fn + Space.
+  Always remind users that the selected trigger must match the active input
+  method's voice-input setting.
 - Prefer a visual remote diagram with a clearly paired mapping inspector.
 - Offer useful defaults, explicit reset, and a disabled action for every
   remappable button.

@@ -6,7 +6,7 @@
 
 ## 产品定位
 
-vRemoter 把蓝牙语音遥控器变成 macOS 上的 Vibe Coding 控制器：遥控器语音键控制豆包输入法，遥控器麦克风与 MacBook 麦克风混合为同一个 CoreAudio 输入设备 `vRemoteDr 2ch`。
+vRemoter 把蓝牙语音遥控器变成 macOS 上的 Vibe Coding 控制器：遥控器语音键控制豆包输入法或微信输入法（控制台可切换），遥控器麦克风与 MacBook 麦克风混合为同一个 CoreAudio 输入设备 `vRemoteDr 2ch`。
 
 已接入的遥控器：
 
@@ -16,6 +16,12 @@ vRemoter 把蓝牙语音遥控器变成 macOS 上的 Vibe Coding 控制器：遥
 Chromecast Remote 已实现语音键双模式：短按第一次打开、第二次关闭；长按时持续录音，松手自动关闭。APP 还提供按型号保存的按键映射，可把方向、确认、返回、Home、YouTube、Netflix、信源、音量等按键改为常用 macOS 操作。
 
 当前版本：`1.1.1`
+
+## 未发布
+
+- 支持微信输入法 2.0+：控制台可切换豆包输入法 / 微信输入法。
+- 微信输入法使用「修饰键 + 空格」切换免提语音模式，默认 Fn + 空格；使用前需在菜单栏切换到微信输入法，麦克风仍选择 `vRemoteDr 2ch`。
+- 豆包与微信输入法分别保存触发键，切换输入法不会覆盖另一边的设置。
 
 ## 1.1.1 修复
 
@@ -40,7 +46,7 @@ Chromecast Remote 已实现语音键双模式：短按第一次打开、第二�
 
 完整历史见 [CHANGELOG.md](CHANGELOG.md)。
 
-当前支持边界：Chromecast 仅确认上述 VID/PID；X6 鼠标模式切换键由设备固件内部处理，不能单独重映射。语音键保留给豆包语音控制。Fn 的实际行为取决于 Mac 与豆包配置，建议首次使用时现场测试。
+当前支持边界：Chromecast 仅确认上述 VID/PID；X6 鼠标模式切换键由设备固件内部处理，不能单独重映射。语音键保留给豆包 / 微信输入法语音控制。豆包默认用 Option 单击切换；微信输入法默认用 Fn + 空格进入免提模式。Fn 的实际行为取决于 Mac 与输入法配置，建议首次使用时现场测试。
 
 ## 支持开发
 
@@ -77,6 +83,8 @@ vRemoter 免费提供。制作不易，麻烦打个赏补偿一点我的 Token �
 - `docs/`：公开官网静态源文件。
 - `Server/`：马来西亚服务器配置与发布清单模板。
 - `OPERATIONS.md`：从构建到上线和回滚的操作手册。
+- `TROUBLESHOOTING.md`：遥控器语音输入链路（ATVV、虚拟声卡、豆包触发键）的排查与修复手册。
+- `MIC-INDICATOR-RESEARCH.md`：麦克风指示灯常亮问题与 Output Only 方案的调研报告。
 
 ## 构建
 
@@ -116,6 +124,8 @@ APP 从以下地址读取版本清单：
 
 ## 相关文档
 
+- [语音输入排查与修复手册](TROUBLESHOOTING.md)
+- [麦克风指示灯与 Output Only 方案调研](MIC-INDICATOR-RESEARCH.md)
 - [完整发布与服务器运维手册](OPERATIONS.md)
 - [第三方许可说明](THIRD_PARTY_NOTICES.md)
 - [音频驱动说明](Driver/README.md)

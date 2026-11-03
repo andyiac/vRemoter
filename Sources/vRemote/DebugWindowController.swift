@@ -6,7 +6,7 @@ import CoreGraphics
 import SwiftUI
 
 enum PermissionKind: String, Identifiable, CaseIterable {
-    case doubaoInput
+    case inputMethod
     case microphone
     case accessibility
     case inputMonitoring
@@ -14,9 +14,15 @@ enum PermissionKind: String, Identifiable, CaseIterable {
 
     var id: String { rawValue }
 
+    private var target: InputMethodTarget { AppStorage.inputMethodTarget }
+
     var title: String {
         switch self {
-        case .doubaoInput: L10n.text("豆包麦克风设置", "Doubao Microphone Setup")
+        case .inputMethod:
+            L10n.text(
+                "\(target.shortName)麦克风设置",
+                "\(target.shortName) Microphone Setup"
+            )
         case .microphone: L10n.text("麦克风权限", "Microphone Permission")
         case .accessibility: L10n.text("辅助功能权限", "Accessibility Permission")
         case .inputMonitoring: L10n.text("输入监控权限", "Input Monitoring Permission")
@@ -27,7 +33,7 @@ enum PermissionKind: String, Identifiable, CaseIterable {
     var settingsURL: URL? {
         let anchor: String
         switch self {
-        case .doubaoInput: return nil
+        case .inputMethod: return nil
         case .microphone: anchor = "Privacy_Microphone"
         case .accessibility: anchor = "Privacy_Accessibility"
         case .inputMonitoring: anchor = "Privacy_ListenEvent"
@@ -40,13 +46,23 @@ enum PermissionKind: String, Identifiable, CaseIterable {
 
     var screenshotNames: [String] {
         switch self {
-        case .doubaoInput:
-            [
-                "permission-app-management",
-                "doubaoinput0",
-                "doubaoinput1",
-                "doubaoinput2"
-            ]
+        case .inputMethod:
+            switch target {
+            case .doubao:
+                [
+                    "permission-app-management",
+                    "doubaoinput0",
+                    "doubaoinput1",
+                    "doubaoinput2"
+                ]
+            case .wechat:
+                [
+                    "permission-app-management",
+                    "wetypeinput0",
+                    "wetypeinput1",
+                    "wetypeinput2"
+                ]
+            }
         case .microphone: ["permission-microphone", "permission-microphone"]
         case .accessibility: ["permission-accessibility", "permission-accessibility"]
         case .inputMonitoring: ["permission-input-monitoring", "permission-input-monitoring"]
@@ -56,25 +72,47 @@ enum PermissionKind: String, Identifiable, CaseIterable {
 
     var guidance: [String] {
         switch self {
-        case .doubaoInput:
-            return [
-                L10n.text(
-                    "首次直接打开豆包设置时，macOS 可能询问“App 管理”；请允许 vRemote 启动豆包输入法的设置组件。",
-                    "The first direct launch may ask for App Management. Allow vRemote to open Doubao's settings component."
-                ),
-                L10n.text(
-                    "打开菜单栏输入法菜单，点击“豆包输入法设置”。",
-                    "Open the input menu in the menu bar and choose Doubao Input Method Settings."
-                ),
-                L10n.text(
-                    "进入“语音输入”，找到“麦克风选择”，点击当前选项。",
-                    "Open Voice Input, locate Microphone Selection, and click the current option."
-                ),
-                L10n.text(
-                    "选择“自动检测”或“vRemoteDr 2ch”。如果自动检测没有声音，请直接选择 vRemoteDr 2ch。",
-                    "Choose Automatic Detection or vRemoteDr 2ch. If automatic detection is silent, select vRemoteDr 2ch directly."
-                )
-            ]
+        case .inputMethod:
+            switch target {
+            case .doubao:
+                return [
+                    L10n.text(
+                        "首次直接打开豆包设置时，macOS 可能询问“App 管理”；请允许 vRemote 启动豆包输入法的设置组件。",
+                        "The first direct launch may ask for App Management. Allow vRemote to open Doubao's settings component."
+                    ),
+                    L10n.text(
+                        "打开菜单栏输入法菜单，点击“豆包输入法设置”。",
+                        "Open the input menu in the menu bar and choose Doubao Input Method Settings."
+                    ),
+                    L10n.text(
+                        "进入“语音输入”，找到“麦克风选择”，点击当前选项。",
+                        "Open Voice Input, locate Microphone Selection, and click the current option."
+                    ),
+                    L10n.text(
+                        "选择“自动检测”或“vRemoteDr 2ch”。如果自动检测没有声音，请直接选择 vRemoteDr 2ch。",
+                        "Choose Automatic Detection or vRemoteDr 2ch. If automatic detection is silent, select vRemoteDr 2ch directly."
+                    )
+                ]
+            case .wechat:
+                return [
+                    L10n.text(
+                        "首次直接打开微信输入法设置时，macOS 可能询问“App 管理”；请允许 vRemote 启动微信输入法的设置组件。",
+                        "The first direct launch may ask for App Management. Allow vRemote to open WeChat Input Method's settings component."
+                    ),
+                    L10n.text(
+                        "打开菜单栏输入法菜单，确认当前输入法是微信输入法，并点击“微信输入法设置”。",
+                        "Open the input menu, make sure WeChat Input Method is selected, and choose WeChat Input Method Settings."
+                    ),
+                    L10n.text(
+                        "进入“语音输入”，找到麦克风或输入设备设置。",
+                        "Open Voice Input and locate the microphone or input device setting."
+                    ),
+                    L10n.text(
+                        "选择 vRemoteDr 2ch。微信输入法默认用 Fn + 空格开启免提模式，控制台触发键也应保持 Fn。",
+                        "Choose vRemoteDr 2ch. WeChat uses Fn + Space for hands-free mode by default, so keep the console trigger on Fn."
+                    )
+                ]
+            }
         case .microphone:
             return [
                 L10n.text(
@@ -243,8 +281,8 @@ private final class ConsoleViewModel: ObservableObject {
     @Published var remoteStreaming = false
     @Published var macInputEnabled = true
     @Published var remoteInputEnabled = true
-    @Published var doubaoIsRecording = false
-    @Published var doubaoInput = "--"
+    @Published var inputMethodIsRecording = false
+    @Published var inputMethodInput = "--"
     @Published var driverAvailable = false
     @Published var macLevelDB = -120.0
     @Published var remoteLevelDB = -120.0
@@ -254,7 +292,8 @@ private final class ConsoleViewModel: ObservableObject {
     @Published var bluetoothGranted = false
     @Published var x6Connected = false
     @Published var chromecastConnected = false
-    @Published var inputTriggerKey = AppStorage.inputTriggerKey
+    @Published var inputMethodTarget = AppStorage.inputMethodTarget
+    @Published var inputTriggerKey = AppStorage.effectiveInputTriggerKey
     @Published var activeModal: ConsoleModal?
     @Published var showX6MicHint = !UserDefaults.standard.bool(
         forKey: "vRemoter.hasCompletedX6MicTest"
@@ -267,16 +306,25 @@ private final class ConsoleViewModel: ObservableObject {
     var onMacInputEnabledChanged: ((Bool) -> Void)?
     var onRemoteInputEnabledChanged: ((Bool) -> Void)?
     var onInputTriggerChanged: (() -> Void)?
+    var onInputMethodTargetChanged: ((InputMethodTarget) -> Void)?
     var onRemoteMappingEnabledChanged: ((SupportedRemoteID, Bool) -> Void)?
 
-    var doubaoUsesVRemote: Bool { doubaoInput.contains("vRemoteDr 2ch") }
+    var inputMethodUsesVRemote: Bool { inputMethodInput.contains("vRemoteDr 2ch") }
     var macSolo: Bool { macInputEnabled && !remoteInputEnabled }
     var remoteSolo: Bool { remoteInputEnabled && !macInputEnabled }
+
+    func setInputMethodTarget(_ target: InputMethodTarget) {
+        guard inputMethodTarget != target else { return }
+        inputMethodTarget = target
+        AppStorage.inputMethodTarget = target
+        inputTriggerKey = AppStorage.effectiveInputTriggerKey
+        onInputMethodTargetChanged?(target)
+    }
 
     func setInputTrigger(_ trigger: InputTriggerKey) {
         guard inputTriggerKey != trigger else { return }
         inputTriggerKey = trigger
-        AppStorage.inputTriggerKey = trigger
+        AppStorage.effectiveInputTriggerKey = trigger
         onInputTriggerChanged?()
     }
 
@@ -335,8 +383,8 @@ private final class ConsoleViewModel: ObservableObject {
     }
 
     func openSettings(for kind: PermissionKind) {
-        if kind == .doubaoInput {
-            openDoubaoSettings()
+        if kind == .inputMethod {
+            openInputMethodSettings()
             activeModal = nil
             return
         }
@@ -345,18 +393,27 @@ private final class ConsoleViewModel: ObservableObject {
         activeModal = nil
     }
 
-    private func openDoubaoSettings() {
-        let bundleIdentifier = "com.bytedance.inputmethod.doubaoime.settings"
-        let candidates = [
-            NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier),
-            URL(
-                fileURLWithPath:
-                    "/Library/Input Methods/DoubaoIme.app/Contents/DoubaoImeSettings.app"
-            )
-        ]
-        for candidate in candidates.compactMap({ $0 })
+    private func openInputMethodSettings() {
+        let target = AppStorage.inputMethodTarget
+        var candidates: [URL] = []
+        if let bundleIdentifier = target.settingsBundleID,
+           let url = NSWorkspace.shared.urlForApplication(
+               withBundleIdentifier: bundleIdentifier
+           ) {
+            candidates.append(url)
+        }
+        candidates.append(contentsOf: target.settingsAppPaths.map {
+            URL(fileURLWithPath: $0)
+        })
+        for candidate in candidates
             where FileManager.default.fileExists(atPath: candidate.path) {
             if NSWorkspace.shared.open(candidate) { return }
+        }
+        // Some input methods only expose settings from their main app.
+        if let app = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: target.bundleID
+        ) {
+            NSWorkspace.shared.open(app)
         }
     }
 
@@ -407,14 +464,14 @@ private final class ConsoleViewModel: ObservableObject {
             presentDonationPrompt()
             return
         }
-        let doubaoHealthy = !doubaoIsRecording || doubaoUsesVRemote
+        let inputMethodHealthy = !inputMethodIsRecording || inputMethodUsesVRemote
         let allHealthy = hidConnected
             && bleConnected
             && driverAvailable
             && microphoneGranted
             && accessibilityGranted
             && inputMonitoringGranted
-            && doubaoHealthy
+            && inputMethodHealthy
         guard DonationPromptSchedule.shouldPresent(isHealthy: allHealthy) else { return }
         presentDonationPrompt()
     }
@@ -435,6 +492,7 @@ final class DebugWindowController: NSWindowController, NSWindowDelegate {
     var onMacInputEnabledChanged: ((Bool) -> Void)?
     var onRemoteInputEnabledChanged: ((Bool) -> Void)?
     var onInputTriggerChanged: (() -> Void)?
+    var onInputMethodTargetChanged: ((InputMethodTarget) -> Void)?
     var onRemoteMappingEnabledChanged: ((SupportedRemoteID, Bool) -> Void)?
 
     private let model = ConsoleViewModel()
@@ -477,6 +535,9 @@ final class DebugWindowController: NSWindowController, NSWindowDelegate {
         model.onInputTriggerChanged = { [weak self] in
             self?.onInputTriggerChanged?()
         }
+        model.onInputMethodTargetChanged = { [weak self] target in
+            self?.onInputMethodTargetChanged?(target)
+        }
         model.onRemoteMappingEnabledChanged = { [weak self] remote, enabled in
             self?.onRemoteMappingEnabledChanged?(remote, enabled)
         }
@@ -496,6 +557,8 @@ final class DebugWindowController: NSWindowController, NSWindowDelegate {
 
     func show() {
         guard let window else { return }
+        model.inputMethodTarget = AppStorage.inputMethodTarget
+        model.inputTriggerKey = AppStorage.effectiveInputTriggerKey
         model.refreshPermissions()
         startPermissionTimer()
         NSApp.activate(ignoringOtherApps: true)
@@ -509,8 +572,8 @@ final class DebugWindowController: NSWindowController, NSWindowDelegate {
         remoteStreaming: Bool,
         macInputEnabled: Bool,
         remoteInputEnabled: Bool,
-        doubaoIsRecording: Bool,
-        doubaoInput: String,
+        inputMethodIsRecording: Bool,
+        inputMethodInput: String,
         driverAvailable: Bool,
         x6Connected: Bool,
         chromecastConnected: Bool,
@@ -520,13 +583,15 @@ final class DebugWindowController: NSWindowController, NSWindowDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.model.status = status
+            self.model.inputMethodTarget = AppStorage.inputMethodTarget
+            self.model.inputTriggerKey = AppStorage.effectiveInputTriggerKey
             self.model.hidConnected = hidConnected
             self.model.bleConnected = bleConnected
             self.model.remoteStreaming = remoteStreaming
             self.model.macInputEnabled = macInputEnabled
             self.model.remoteInputEnabled = remoteInputEnabled
-            self.model.doubaoIsRecording = doubaoIsRecording
-            self.model.doubaoInput = doubaoInput
+            self.model.inputMethodIsRecording = inputMethodIsRecording
+            self.model.inputMethodInput = inputMethodInput
             self.model.driverAvailable = driverAvailable
             self.model.x6Connected = x6Connected
             self.model.chromecastConnected = chromecastConnected
@@ -735,17 +800,20 @@ private struct StudioMixerView: View {
     private var statusPanel: some View {
         VStack(spacing: 0) {
             StatusRow(
-                title: L10n.text("豆包输入设备", "Doubao input"),
-                value: model.doubaoIsRecording
-                    ? (model.doubaoUsesVRemote
+                title: L10n.text(
+                    "\(model.inputMethodTarget.shortName)麦克风",
+                    "\(model.inputMethodTarget.shortName) microphone"
+                ),
+                value: model.inputMethodIsRecording
+                    ? (model.inputMethodUsesVRemote
                         ? L10n.text("vRemoteDr 2ch · 录音中", "vRemoteDr 2ch · Recording")
-                        : model.doubaoInput)
+                        : model.inputMethodInput)
                     : L10n.text("当前未录音", "Not recording"),
-                tone: model.doubaoIsRecording && !model.doubaoUsesVRemote ? .error : .good,
-                action: model.doubaoIsRecording && !model.doubaoUsesVRemote
+                tone: model.inputMethodIsRecording && !model.inputMethodUsesVRemote ? .error : .good,
+                action: model.inputMethodIsRecording && !model.inputMethodUsesVRemote
                     ? L10n.text("设置方法", "Fix settings")
                     : nil,
-                onAction: { model.activeModal = .permission(.doubaoInput) }
+                onAction: { model.activeModal = .permission(.inputMethod) }
             )
             StatusRow(
                 title: L10n.text("音频驱动", "Audio driver"),
@@ -870,50 +938,120 @@ private struct KeyMappingView: View {
                 HStack(spacing: 7) {
                     Image(systemName: "waveform.badge.mic")
                         .foregroundStyle(ConsoleTheme.green)
-                    Text(L10n.text("豆包语音触发键", "Doubao voice trigger"))
+                    Text(L10n.text(
+                        "\(model.inputMethodTarget.shortName)语音触发键",
+                        "\(model.inputMethodTarget.shortName) voice trigger"
+                    ))
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(ConsoleTheme.text)
                 }
-                Text(L10n.text(
-                    "遥控器语音键与电脑键盘都使用这个按键控制豆包。这里必须与豆包输入法中的语音快捷键保持一致。",
-                    "The remote voice key and Mac keyboard both use this trigger. It must match Doubao Input Method's voice shortcut."
-                ))
+                Text(triggerDescription)
                     .font(.system(size: 12.5))
                     .foregroundStyle(ConsoleTheme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 10)
-            VStack(alignment: .trailing, spacing: 7) {
-                Picker(
-                    L10n.text("触发键", "Trigger"),
-                    selection: Binding(
-                        get: { model.inputTriggerKey },
-                        set: model.setInputTrigger
-                    )
-                ) {
-                    ForEach(InputTriggerKey.allCases) { trigger in
-                        Text(trigger.title).tag(trigger)
+            VStack(alignment: .trailing, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(L10n.text("输入法", "Input method"))
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(ConsoleTheme.secondary)
+                    Picker(
+                        L10n.text("输入法", "Input method"),
+                        selection: Binding(
+                            get: { model.inputMethodTarget },
+                            set: model.setInputMethodTarget
+                        )
+                    ) {
+                        ForEach(InputMethodTarget.allCases) { target in
+                            Text(target.displayName).tag(target)
+                        }
                     }
+                    .labelsHidden()
+                    .frame(width: 145)
+                    .disabled(model.remoteStreaming)
                 }
-                .labelsHidden()
-                .frame(width: 158)
-                .disabled(model.remoteStreaming)
-                if model.inputTriggerKey == .function {
-                    Label(
-                        L10n.text("Fn 需在本机测试", "Test Fn on this Mac"),
-                        systemImage: "exclamationmark.triangle.fill"
-                    )
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(ConsoleTheme.amber)
-                } else if model.remoteStreaming {
-                    Text(L10n.text("录音结束后可修改", "Stop recording to change"))
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(ConsoleTheme.tertiary)
+                HStack(spacing: 8) {
+                    Text(L10n.text("触发键", "Trigger"))
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(ConsoleTheme.secondary)
+                    Picker(
+                        L10n.text("触发键", "Trigger"),
+                        selection: Binding(
+                            get: { model.inputTriggerKey },
+                            set: model.setInputTrigger
+                        )
+                    ) {
+                        ForEach(InputTriggerKey.allCases) { trigger in
+                            Text(trigger.title).tag(trigger)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 145)
+                    .disabled(model.remoteStreaming)
                 }
+                triggerNote
             }
         }
         .padding(.horizontal, 19)
         .background(panelBackground(ConsoleTheme.surface, radius: 17))
+    }
+
+    private var triggerDescription: String {
+        switch model.inputMethodTarget {
+        case .doubao:
+            L10n.text(
+                "遥控器语音键与电脑键盘都使用这个按键控制豆包。这里必须与豆包输入法中的语音快捷键保持一致。",
+                "The remote voice key and Mac keyboard both use this trigger. It must match Doubao Input Method's voice shortcut."
+            )
+        case .wechat:
+            L10n.text(
+                "遥控器语音键会发送所选修饰键 + 空格，切换微信输入法的免提语音模式。使用前请先在菜单栏切换到微信输入法；这里必须与微信输入法设置中的免提快捷键保持一致（默认 Fn + 空格）。",
+                "The remote voice key sends the selected modifier + Space to toggle WeChat's hands-free voice mode. Switch to WeChat Input Method in the input menu first, and keep this trigger in sync with WeChat's hands-free shortcut (default Fn + Space)."
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var triggerNote: some View {
+        if !model.inputMethodTarget.isInstalled {
+            Label(
+                L10n.text("未检测到该输入法", "Input method not found"),
+                systemImage: "exclamationmark.triangle.fill"
+            )
+            .font(.system(size: 10.5, weight: .medium))
+            .foregroundStyle(ConsoleTheme.amber)
+        } else if model.remoteStreaming {
+            Text(L10n.text("录音结束后可修改", "Stop recording to change"))
+                .font(.system(size: 10.5))
+                .foregroundStyle(ConsoleTheme.tertiary)
+        } else if model.inputMethodTarget == .wechat {
+            if model.inputTriggerKey == .function {
+                Label(
+                    L10n.text("默认 Fn + 空格", "Default: Fn + Space"),
+                    systemImage: "info.circle"
+                )
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(ConsoleTheme.green)
+            } else {
+                Label(
+                    L10n.text(
+                        "需与微信输入法免提键一致",
+                        "Must match WeChat's hands-free shortcut"
+                    ),
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(ConsoleTheme.amber)
+            }
+        } else if model.inputTriggerKey == .function {
+            Label(
+                L10n.text("Fn 需在本机测试", "Test Fn on this Mac"),
+                systemImage: "exclamationmark.triangle.fill"
+            )
+            .font(.system(size: 10.5, weight: .medium))
+            .foregroundStyle(ConsoleTheme.amber)
+        }
     }
 
     private var devicePanel: some View {
@@ -1465,7 +1603,10 @@ private struct OutputChannelView: View {
             Text(L10n.text("混合输出", "Mixed Output"))
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(ConsoleTheme.text)
-            Text(L10n.text("发送给豆包", "Sent to Doubao"))
+            Text(L10n.text(
+                "发送给\(model.inputMethodTarget.shortName)",
+                "Sent to \(model.inputMethodTarget.shortName)"
+            ))
                 .font(.system(size: 13))
                 .foregroundStyle(ConsoleTheme.secondary)
                 .padding(.top, 4)
@@ -1523,7 +1664,10 @@ private struct OutputChannelView: View {
             .padding(.top, 25)
             Text(outputError
                 ? L10n.text("等待音频链路恢复", "Waiting for audio route")
-                : L10n.text("豆包正在接收", "Doubao is receiving"))
+                : L10n.text(
+                    "\(model.inputMethodTarget.shortName)正在接收",
+                    "\(model.inputMethodTarget.shortName) is receiving"
+                ))
                 .font(.system(size: 11))
                 .foregroundStyle(outputError ? ConsoleTheme.red : ConsoleTheme.secondary)
                 .padding(.top, 15)
@@ -1538,7 +1682,7 @@ private struct OutputChannelView: View {
     }
 
     private var outputError: Bool {
-        !model.driverAvailable || (model.doubaoIsRecording && !model.doubaoUsesVRemote)
+        !model.driverAvailable || (model.inputMethodIsRecording && !model.inputMethodUsesVRemote)
     }
 }
 
@@ -2050,11 +2194,13 @@ private struct GuideScreenshot: View {
                         .resizable()
                         .scaledToFit()
                         .frame(width: proxy.size.width, height: proxy.size.height)
+                } else if kind == .inputMethod {
+                    inputMethodPlaceholder
                 } else {
                     screenshotPlaceholder
                 }
 
-                if kind != .doubaoInput || page == 0 {
+                if showsHighlight {
                     RoundedRectangle(cornerRadius: 10)
                         .stroke(ConsoleTheme.red, lineWidth: 3)
                         .frame(
@@ -2082,6 +2228,63 @@ private struct GuideScreenshot: View {
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(ConsoleTheme.line))
         }
+    }
+
+    private var showsHighlight: Bool {
+        if kind != .inputMethod { return true }
+        return AppStorage.inputMethodTarget == .doubao && page == 0
+    }
+
+    private var inputMethodPlaceholder: some View {
+        let target = AppStorage.inputMethodTarget
+        return HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(target.displayName)
+                    .font(.system(size: 16, weight: .semibold))
+                Text(L10n.text("设置", "Settings"))
+                    .foregroundStyle(ConsoleTheme.text)
+                Text(L10n.text("语音输入", "Voice Input"))
+                    .foregroundStyle(ConsoleTheme.green)
+                Spacer()
+            }
+            .padding(20)
+            .frame(width: 190, alignment: .leading)
+            .background(ConsoleTheme.surface)
+            VStack(alignment: .leading, spacing: 18) {
+                Text(L10n.text("麦克风", "Microphone"))
+                    .font(.system(size: 18, weight: .semibold))
+                Text(L10n.text(
+                    "把语音输入使用的麦克风固定为 vRemoteDr 2ch。",
+                    "Set the voice input microphone to vRemoteDr 2ch."
+                ))
+                    .foregroundStyle(ConsoleTheme.secondary)
+                HStack {
+                    Image(systemName: "mic.fill")
+                        .foregroundStyle(ConsoleTheme.green)
+                    Text("vRemoteDr 2ch")
+                    Spacer()
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(ConsoleTheme.green)
+                }
+                .padding(12)
+                .background(ConsoleTheme.surface2)
+                .clipShape(RoundedRectangle(cornerRadius: 9))
+                Text(target == .wechat
+                    ? L10n.text(
+                        "微信输入法默认使用 Fn + 空格开启免提模式。",
+                        "WeChat uses Fn + Space for hands-free mode by default."
+                    )
+                    : L10n.text(
+                        "豆包输入法默认使用 Option 切换语音输入。",
+                        "Doubao uses Option to toggle voice input by default."
+                    ))
+                    .font(.system(size: 11))
+                    .foregroundStyle(ConsoleTheme.tertiary)
+                Spacer()
+            }
+            .padding(20)
+        }
+        .foregroundStyle(ConsoleTheme.text)
     }
 
     private var screenshotPlaceholder: some View {
@@ -2124,7 +2327,7 @@ private struct GuideScreenshot: View {
 
     private var secondPageY: CGFloat {
         switch kind {
-        case .doubaoInput: 0.5
+        case .inputMethod: 0.5
         case .microphone: 0.92
         case .accessibility: 0.89
         case .inputMonitoring: 0.46
@@ -2133,19 +2336,19 @@ private struct GuideScreenshot: View {
     }
 
     private var highlightWidth: CGFloat {
-        kind == .doubaoInput ? 0.36 : (page == 0 ? 0.38 : 0.45)
+        kind == .inputMethod ? 0.36 : (page == 0 ? 0.38 : 0.45)
     }
 
     private var highlightHeight: CGFloat {
-        kind == .doubaoInput ? 0.11 : 0.10
+        kind == .inputMethod ? 0.11 : 0.10
     }
 
     private var highlightX: CGFloat {
-        kind == .doubaoInput ? 0.60 : (page == 0 ? 0.255 : 0.62)
+        kind == .inputMethod ? 0.60 : (page == 0 ? 0.255 : 0.62)
     }
 
     private var highlightY: CGFloat {
-        kind == .doubaoInput ? 0.40 : (page == 0 ? 0.25 : secondPageY)
+        kind == .inputMethod ? 0.40 : (page == 0 ? 0.25 : secondPageY)
     }
 
     private func guideArrow(

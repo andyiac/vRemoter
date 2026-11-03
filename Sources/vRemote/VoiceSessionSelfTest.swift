@@ -3,30 +3,30 @@ import CoreAudio
 import Foundation
 
 enum VoiceSessionSelfTest {
-    private final class FakeDoubaoState: DoubaoAudioStateProviding {
-        var onSnapshotChanged: ((DoubaoAudioStateMonitor.Snapshot) -> Void)?
-        private(set) var snapshot: DoubaoAudioStateMonitor.Snapshot
+    private final class FakeInputMethodState: InputMethodAudioStateProviding {
+        var onSnapshotChanged: ((InputMethodAudioStateMonitor.Snapshot) -> Void)?
+        private(set) var snapshot: InputMethodAudioStateMonitor.Snapshot
 
-        init(state: DoubaoAudioStateMonitor.State = .inactive) {
+        init(state: InputMethodAudioStateMonitor.State = .inactive) {
             snapshot = Self.makeSnapshot(state)
         }
 
         func start() {}
         func stop() {}
 
-        func snapshotNow() -> DoubaoAudioStateMonitor.Snapshot {
+        func snapshotNow() -> InputMethodAudioStateMonitor.Snapshot {
             snapshot
         }
 
-        func emit(_ state: DoubaoAudioStateMonitor.State) {
+        func emit(_ state: InputMethodAudioStateMonitor.State) {
             snapshot = Self.makeSnapshot(state)
             onSnapshotChanged?(snapshot)
         }
 
         private static func makeSnapshot(
-            _ state: DoubaoAudioStateMonitor.State
-        ) -> DoubaoAudioStateMonitor.Snapshot {
-            DoubaoAudioStateMonitor.Snapshot(
+            _ state: InputMethodAudioStateMonitor.State
+        ) -> InputMethodAudioStateMonitor.Snapshot {
+            InputMethodAudioStateMonitor.Snapshot(
                 state: state,
                 pid: 123,
                 processObjectID: 456,
@@ -37,7 +37,7 @@ enum VoiceSessionSelfTest {
     }
 
     private final class Harness {
-        let doubao: FakeDoubaoState
+        let inputMethod: FakeInputMethodState
         let coordinator: X6SessionCoordinator
         var clock = Date(timeIntervalSince1970: 1_000)
         var triggerTapCount = 0
@@ -47,13 +47,13 @@ enum VoiceSessionSelfTest {
         var openResults = [RemoteMicrophoneOpenResult]()
         var preferredRemote: VoiceRemoteID? = .chromecast
 
-        init(initialState: DoubaoAudioStateMonitor.State = .inactive) {
-            doubao = FakeDoubaoState(state: initialState)
+        init(initialState: InputMethodAudioStateMonitor.State = .inactive) {
+            inputMethod = FakeInputMethodState(state: initialState)
             var routeSink: ((Bool) -> Void)?
             var triggerSink: (() -> Void)?
             var nowSink: (() -> Date)?
             coordinator = X6SessionCoordinator(
-                doubaoState: doubao,
+                inputMethodState: inputMethod,
                 setRemoteRouteActive: { routeSink?($0) },
                 triggerTap: { triggerSink?() },
                 now: { nowSink?() ?? Date(timeIntervalSince1970: 0) }
@@ -140,7 +140,7 @@ enum VoiceSessionSelfTest {
     private static func testActiveBeforeRelease(_ c: CheckContext) {
         let h = Harness()
         h.beginChromecastPress()
-        h.doubao.emit(.active)
+        h.inputMethod.emit(.active)
         c.expect(h.openRequests.isEmpty, "active-before-release waits for physical STOP")
         h.advance(0.18)
         h.endChromecastPress()
@@ -157,7 +157,7 @@ enum VoiceSessionSelfTest {
         h.advance(0.12)
         h.endChromecastPress()
         c.expect(h.openRequests.count == 1, "stop-before-active also opens without fixed delay")
-        h.doubao.emit(.active)
+        h.inputMethod.emit(.active)
         c.expect(h.openRequests.count == 1, "active confirmation does not duplicate MIC_OPEN")
         c.expect(h.coordinator.debugSnapshot.phase == "open", "late active completes opening")
     }
@@ -167,7 +167,7 @@ enum VoiceSessionSelfTest {
         h.beginChromecastPress()
         h.advance(0.15)
         h.endChromecastPress()
-        h.doubao.emit(.active)
+        h.inputMethod.emit(.active)
         h.coordinator.remoteAudioStarted(remote: .chromecast, reason: 0x00)
         h.beginChromecastPress()
         h.advance(0.16)
@@ -180,7 +180,7 @@ enum VoiceSessionSelfTest {
     private static func testLongPressCloses(_ c: CheckContext) {
         let h = Harness()
         h.beginChromecastPress()
-        h.doubao.emit(.active)
+        h.inputMethod.emit(.active)
         h.advance(0.70)
         h.endChromecastPress()
         c.expect(h.triggerTapCount == 2, "long release sends one close trigger")
@@ -194,7 +194,7 @@ enum VoiceSessionSelfTest {
         h.coordinator.triggerUpObserved(isSynthetic: false)
         c.expect(h.triggerTapCount == 0, "physical keyboard open is not replayed")
         c.expect(h.openRequests.first?.0 == .chromecast, "keyboard open selects preferred remote")
-        h.doubao.emit(.active)
+        h.inputMethod.emit(.active)
         h.coordinator.remoteAudioStarted(remote: .chromecast, reason: 0x00)
         h.beginChromecastPress()
         h.advance(0.14)
@@ -208,16 +208,16 @@ enum VoiceSessionSelfTest {
         h.beginChromecastPress()
         h.advance(0.16)
         h.endChromecastPress()
-        h.doubao.emit(.active)
+        h.inputMethod.emit(.active)
         h.coordinator.remoteAudioStarted(remote: .chromecast, reason: 0x00)
         h.coordinator.triggerDownObserved(isSynthetic: false)
         h.coordinator.triggerUpObserved(isSynthetic: false)
-        h.doubao.emit(.active)
+        h.inputMethod.emit(.active)
         RunLoop.current.run(until: Date().addingTimeInterval(0.22))
         c.expect(h.triggerTapCount == 1, "keyboard close does not synthesize another trigger")
         c.expect(h.openRequests.count == 1, "stale active cannot reopen transport")
         c.expect(h.coordinator.debugSnapshot.phase == "closing", "stale active keeps closing phase")
-        h.doubao.emit(.inactive)
+        h.inputMethod.emit(.inactive)
         c.expect(h.coordinator.debugSnapshot.phase == "closed", "inactive completes keyboard close")
     }
 
@@ -229,7 +229,7 @@ enum VoiceSessionSelfTest {
             reason: 0x03,
             supportsPhysicalHoldGesture: true
         )
-        c.expect(h.triggerTapCount == 1, "second remote start does not toggle Doubao twice")
+        c.expect(h.triggerTapCount == 1, "second remote start does not toggle the input method twice")
         c.expect(
             h.coordinator.debugSnapshot.streamingRemotes == Set([.x6, .chromecast]),
             "both remote transports are tracked independently"

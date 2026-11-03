@@ -13,23 +13,23 @@ enum RemoteMicrophoneOpenResult: Equatable {
     case failed(String)
 }
 
-protocol DoubaoAudioStateProviding: AnyObject {
-    var onSnapshotChanged: ((DoubaoAudioStateMonitor.Snapshot) -> Void)? {
+protocol InputMethodAudioStateProviding: AnyObject {
+    var onSnapshotChanged: ((InputMethodAudioStateMonitor.Snapshot) -> Void)? {
         get set
     }
 
     func start()
     func stop()
-    func snapshotNow() -> DoubaoAudioStateMonitor.Snapshot
+    func snapshotNow() -> InputMethodAudioStateMonitor.Snapshot
 }
 
-extension DoubaoAudioStateMonitor: DoubaoAudioStateProviding {}
+extension InputMethodAudioStateMonitor: InputMethodAudioStateProviding {}
 
 /// Coordinates the input-method toggle, supported remote gestures, and each
 /// remote's independent ATVV transport.
 ///
 /// A transport START/STOP is never itself a keyboard toggle. A physical
-/// keyboard trigger already reaches Doubao. A remote gesture synthesizes
+/// keyboard trigger already reaches the input method. A remote gesture synthesizes
 /// exactly one trigger only when it changes the intended recognition state.
 final class X6SessionCoordinator {
     private enum Phase: String {
@@ -64,9 +64,10 @@ final class X6SessionCoordinator {
     private static let closeVerificationTimeout: TimeInterval = 1.2
     private static let maximumOpenAttempts = 3
 
-    private let doubaoState: any DoubaoAudioStateProviding
+    private let inputMethodState: any InputMethodAudioStateProviding
     private let setRemoteRouteActive: (Bool) -> Void
     private let triggerTap: () -> Void
+    private let inputMethodName: () -> String
     private let now: () -> Date
 
     private var phase: Phase = .closed
@@ -91,14 +92,16 @@ final class X6SessionCoordinator {
     var onStateChanged: ((String) -> Void)?
 
     init(
-        doubaoState: any DoubaoAudioStateProviding,
+        inputMethodState: any InputMethodAudioStateProviding,
+        inputMethodName: @escaping () -> String = { "输入法" },
         setRemoteRouteActive: @escaping (Bool) -> Void = {
             AudioPipe.shared.setRemoteActive($0)
         },
         triggerTap: @escaping () -> Void = { Key.triggerTap() },
         now: @escaping () -> Date = Date.init
     ) {
-        self.doubaoState = doubaoState
+        self.inputMethodState = inputMethodState
+        self.inputMethodName = inputMethodName
         self.setRemoteRouteActive = setRemoteRouteActive
         self.triggerTap = triggerTap
         self.now = now
@@ -115,10 +118,10 @@ final class X6SessionCoordinator {
     }
 
     func start() {
-        doubaoState.onSnapshotChanged = { [weak self] snapshot in
-            self?.handleDoubaoSnapshot(snapshot)
+        inputMethodState.onSnapshotChanged = { [weak self] snapshot in
+            self?.handleInputMethodSnapshot(snapshot)
         }
-        doubaoState.start()
+        inputMethodState.start()
     }
 
     // MARK: - ATVV transport
@@ -128,7 +131,7 @@ final class X6SessionCoordinator {
         reason: UInt8,
         supportsPhysicalHoldGesture: Bool = false
     ) {
-        let snapshot = doubaoState.snapshotNow()
+        let snapshot = inputMethodState.snapshotNow()
         let inserted = streamingRemotes.insert(remote).inserted
         if openRequestedRemote == remote {
             openRequestedRemote = nil
@@ -183,13 +186,13 @@ final class X6SessionCoordinator {
             "[VOICE-SESSION] AUDIO_START remote=\(remote.rawValue) reason=" +
             String(format: "0x%02x", reason) +
             " phase=\(phase.rawValue) owner=\(owner.rawValue) " +
-            "doubaoBefore=\(snapshot.state.rawValue) " +
+            "imeBefore=\(snapshot.state.rawValue) " +
             "device=\(snapshot.deviceSummary)"
         )
 
         switch phase {
         case .opening, .open:
-            publish("豆包录音中 · 遥控器已接入")
+            publish("\(imeName)录音中 · 遥控器已接入")
 
         case .closed:
             // Chromecast reserves reason 0x03 for a physical voice press, so
@@ -283,7 +286,7 @@ final class X6SessionCoordinator {
                 bypassDebounce: true,
                 attempt: 1
             )
-            publish("豆包录音中 · 遥控器持续收音")
+            publish("\(imeName)录音中 · 遥控器持续收音")
             return
         }
 
@@ -297,7 +300,7 @@ final class X6SessionCoordinator {
         // it immediately before its HID toggle-off edge. Only the proven
         // Chromecast physical-tap path above performs an immediate recovery.
         if phase == .open || phase == .opening {
-            publish("豆包仍开启 · 遥控器音频已停止")
+            publish("\(imeName)仍开启 · 遥控器音频已停止")
         } else if streamingRemotes.isEmpty {
             scheduleRouteClose(after: 0.08)
         }
@@ -352,11 +355,11 @@ final class X6SessionCoordinator {
 
     // MARK: - Physical keyboard trigger
 
-    /// Called before the real physical trigger reaches Doubao. It updates the
+    /// Called before the real physical trigger reaches the input method. It updates the
     /// remote transport only; it never synthesizes a second keyboard event.
     func triggerDownObserved(isSynthetic: Bool) {
         guard !isSynthetic else { return }
-        let snapshot = doubaoState.snapshotNow()
+        let snapshot = inputMethodState.snapshotNow()
         let shouldOpen: Bool
         switch phase {
         case .closed:
@@ -373,7 +376,7 @@ final class X6SessionCoordinator {
             "[TRIGGER] DOWN source=keyboard action=" +
             (shouldOpen ? "open" : "close") +
             " phase=\(phase.rawValue) " +
-            "doubaoBefore=\(snapshot.state.rawValue) " +
+            "imeBefore=\(snapshot.state.rawValue) " +
             "device=\(snapshot.deviceSummary)"
         )
 
@@ -418,13 +421,13 @@ final class X6SessionCoordinator {
 
     func stop() {
         forceClose()
-        doubaoState.stop()
+        inputMethodState.stop()
     }
 
-    // MARK: - Doubao observation
+    // MARK: - Input-method observation
 
-    private func handleDoubaoSnapshot(
-        _ snapshot: DoubaoAudioStateMonitor.Snapshot
+    private func handleInputMethodSnapshot(
+        _ snapshot: InputMethodAudioStateMonitor.Snapshot
     ) {
         switch snapshot.state {
         case .active:
@@ -444,15 +447,15 @@ final class X6SessionCoordinator {
                         attempt: 1
                     )
                 }
-                publish("豆包录音中 · \(snapshot.deviceSummary)")
+                publish("\(imeName)录音中 · \(snapshot.deviceSummary)")
 
             case .open:
                 activateRemoteRoute()
-                publish("豆包录音中 · \(snapshot.deviceSummary)")
+                publish("\(imeName)录音中 · \(snapshot.deviceSummary)")
 
             case .closing:
                 // CoreAudio can remain active briefly after the trigger has
-                // toggled Doubao off. Never reinterpret this stale edge as a
+                // toggled the input method off. Never reinterpret this stale edge as a
                 // fresh external opening.
                 print(
                     "[VOICE-SESSION] active snapshot ignored while closing"
@@ -468,24 +471,24 @@ final class X6SessionCoordinator {
                 // The opening verification owns this transient idle window.
                 break
             case .open, .closing:
-                finalizeClosed(reason: "Doubao inactive")
+                finalizeClosed(reason: "input method inactive")
             case .closed:
                 if routeActive || !streamingRemotes.isEmpty {
                     closeRouteAndTransports()
                 }
             }
-            publish("豆包已就绪")
+            publish("\(imeName)已就绪")
 
         case .unavailable:
             if phase != .opening {
-                finalizeClosed(reason: "Doubao unavailable")
+                finalizeClosed(reason: "input method unavailable")
             }
-            publish("等待豆包输入法")
+            publish("等待\(imeName)")
         }
     }
 
     private func adoptExternalActivation(
-        _ snapshot: DoubaoAudioStateMonitor.Snapshot
+        _ snapshot: InputMethodAudioStateMonitor.Snapshot
     ) {
         generation &+= 1
         cancelScheduledWork()
@@ -494,7 +497,7 @@ final class X6SessionCoordinator {
         sessionRemote = preferredRemoteProvider?()
         activateRemoteRoute()
         print(
-            "[VOICE-SESSION] Doubao external activation adopted " +
+            "[VOICE-SESSION] Input-method external activation adopted " +
             "device=\(snapshot.deviceSummary)"
         )
         if let remote = sessionRemote {
@@ -504,7 +507,7 @@ final class X6SessionCoordinator {
                 attempt: 1
             )
         }
-        publish("豆包录音中 · \(snapshot.deviceSummary)")
+        publish("\(imeName)录音中 · \(snapshot.deviceSummary)")
     }
 
     // MARK: - State transitions
@@ -517,7 +520,7 @@ final class X6SessionCoordinator {
         sessionRemote = nil
         activateRemoteRoute()
         scheduleStartVerification(for: generation)
-        publish("豆包正在启动 · 等待遥控器")
+        publish("\(imeName)正在启动 · 等待遥控器")
     }
 
     private func beginOpening(
@@ -545,8 +548,8 @@ final class X6SessionCoordinator {
         scheduleStartVerification(for: generation)
         publish(
             owner == .keyboard
-                ? "豆包正在启动 · 遥控器已预热"
-                : "遥控器已启动 · 正在打开豆包"
+                ? "\(imeName)正在启动 · 遥控器已预热"
+                : "遥控器已启动 · 正在打开\(imeName)"
         )
     }
 
@@ -579,7 +582,7 @@ final class X6SessionCoordinator {
         }
         scheduleRouteClose(after: 0.10)
         scheduleCloseVerification(for: generation)
-        publish("遥控器已结束 · 正在关闭豆包")
+        publish("遥控器已结束 · 正在关闭\(imeName)")
         print(
             "[VOICE-SESSION] begin closing reason=\(reason) " +
             "trigger=\(sendTrigger ? "synthetic" : "physical")"
@@ -740,13 +743,13 @@ final class X6SessionCoordinator {
                   self.phase == .opening
             else { return }
             self.startVerificationWorkItem = nil
-            let snapshot = self.doubaoState.snapshotNow()
+            let snapshot = self.inputMethodState.snapshotNow()
             if snapshot.isRecording {
-                self.handleDoubaoSnapshot(snapshot)
+                self.handleInputMethodSnapshot(snapshot)
                 return
             }
             self.finalizeClosed(reason: "opening timeout")
-            self.publish("豆包未启动 · 遥控器自动关闭")
+            self.publish("\(self.imeName)未启动 · 遥控器自动关闭")
         }
         startVerificationWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
@@ -760,7 +763,7 @@ final class X6SessionCoordinator {
                   self.phase == .closing
             else { return }
             self.closeVerificationWorkItem = nil
-            let snapshot = self.doubaoState.snapshotNow()
+            let snapshot = self.inputMethodState.snapshotNow()
             if snapshot.isRecording {
                 // The requested close did not become observable. Follow the
                 // real CoreAudio state without synthesizing another trigger.
@@ -775,13 +778,13 @@ final class X6SessionCoordinator {
                         attempt: 1
                     )
                 }
-                self.publish("豆包仍在录音 · 请再次关闭")
+                self.publish("\(self.imeName)仍在录音 · 请再次关闭")
                 print(
                     "[VOICE-SESSION] close not observed; restored open state"
                 )
             } else {
                 self.finalizeClosed(reason: "close verification")
-                self.publish("豆包已就绪")
+                self.publish("\(self.imeName)已就绪")
             }
         }
         closeVerificationWorkItem = work
@@ -795,7 +798,7 @@ final class X6SessionCoordinator {
         let expectedGeneration = generation
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.generation == expectedGeneration else { return }
-            self.handleDoubaoSnapshot(self.doubaoState.snapshotNow())
+            self.handleInputMethodSnapshot(self.inputMethodState.snapshotNow())
         }
     }
 
@@ -860,4 +863,6 @@ final class X6SessionCoordinator {
     private func publish(_ status: String) {
         onStateChanged?(status)
     }
+
+    private var imeName: String { inputMethodName() }
 }

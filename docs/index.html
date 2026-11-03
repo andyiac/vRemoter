@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <meta name="description" content="让 X6 与 Chromecast Voice Remote 变成 Mac 的语音麦克风与快捷键：对着遥控器说话就行，电视按键也能变成你要的 Mac 操作。vRemoter turns supported Bluetooth voice remotes into a dual-microphone voice input and programmable macOS controller for Doubao.">
+  <meta name="description" content="让 X6 与 Chromecast Voice Remote 变成 Mac 的语音麦克风与快捷键：对着遥控器说话就行，电视按键也能变成你要的 Mac 操作。vRemoter turns supported Bluetooth voice remotes into a dual-microphone voice input and programmable macOS controller for Doubao or WeChat voice input.">
   <title>vRemoter · 把遥控器变成你的麦克风和快捷键</title>
   <link rel="icon" href="assets/brand/vremoter-logo.png">
   <link rel="stylesheet" href="styles.css">
@@ -32,7 +32,7 @@
           <a class="primary-button" href="https://updates.vincentstudio.org/vremoter/" data-zh="免费下载" data-en="Download free">免费下载</a>
           <a class="secondary-link" href="https://github.com/VincentKingHsu/vRemoter" target="_blank" rel="noopener" data-zh="查看源码 ↗" data-en="View source ↗">查看源码 ↗</a>
         </div>
-        <p class="system-note" data-zh="适用于 macOS 12 及以上版本，目前主要配合豆包输入法使用。" data-en="macOS 12 or later. Currently built around Doubao voice input.">适用于 macOS 12 及以上版本，目前主要配合豆包输入法使用。</p>
+        <p class="system-note" data-zh="适用于 macOS 12 及以上版本，支持豆包输入法与微信输入法。" data-en="macOS 12 or later. Supports Doubao and WeChat voice input.">适用于 macOS 12 及以上版本，支持豆包输入法与微信输入法。</p>
       </div>
       <figure class="app-shot hero-shot">
         <img data-localized-audio src="assets/screenshots/vremoter-audio-1.1.1.png" alt="vRemoter 1.1.1 界面截图">
@@ -85,7 +85,7 @@
         <div>
           <p class="eyebrow" data-zh="说话就行" data-en="Just speak">说话就行</p>
           <h2 data-zh="窝在沙发上，也不用挪到电脑前。" data-en="Stay on the sofa. No need to move to the desk.">窝在沙发上，也不用挪到电脑前。</h2>
-          <p data-zh="vRemoter 把遥控器和 MacBook 的麦克风合成一路输入，豆包那边只会看到一支麦克风。触发键默认是 Option，手顺的话，换成 Command、Control、Shift、Fn 都行。" data-en="vRemoter merges the remote and MacBook microphones into one input, so Doubao only sees a single microphone. The trigger key defaults to Option; switch it to Command, Control, Shift, or Fn if that feels more natural.">vRemoter 把遥控器和 MacBook 的麦克风合成一路输入，豆包那边只会看到一支麦克风。触发键默认是 Option，手顺的话，换成 Command、Control、Shift、Fn 都行。</p>
+          <p data-zh="vRemoter 把遥控器和 MacBook 的麦克风合成一路输入，豆包或微信输入法那边只会看到一支麦克风。豆包默认用 Option 单击切换，微信输入法默认用 Fn + 空格进入免提模式。" data-en="vRemoter merges the remote and MacBook microphones into one input, so Doubao or WeChat only sees a single microphone. Doubao defaults to an Option click; WeChat defaults to Fn + Space for hands-free mode.">vRemoter 把遥控器和 MacBook 的麦克风合成一路输入，豆包或微信输入法那边只会看到一支麦克风。豆包默认用 Option 单击切换，微信输入法默认用 Fn + 空格进入免提模式。</p>
         </div>
         <div class="voice-modes">
           <div><span>01</span><h3 data-zh="按一下开，再按一下关" data-en="Tap on, tap off">按一下开，再按一下关</h3><p data-zh="不用一直按着，想说完就说完。" data-en="No need to hold it down the whole time.">不用一直按着，想说完就说完。</p></div>
@@ -99,13 +99,13 @@
       <div class="section-inner">
         <p class="eyebrow" data-zh="上手" data-en="Getting started">上手</p>
         <h2 data-zh="该开的权限，它一步步带你开。" data-en="It walks you through every permission you need.">该开的权限，它一步步带你开。</h2>
-        <p class="section-copy" data-zh="macOS 缺的权限，vRemoter 会直接点进对应的设置页，不用你满屏找。豆包那边选麦克风也有单独向导。" data-en="For any permission macOS still needs, vRemoter opens the exact settings pane for you—no hunting through System Settings. Selecting the microphone in Doubao has its own walkthrough too.">macOS 缺的权限，vRemoter 会直接点进对应的设置页，不用你满屏找。豆包那边选麦克风也有单独向导。</p>
+        <p class="section-copy" data-zh="macOS 缺的权限，vRemoter 会直接点进对应的设置页，不用你满屏找。豆包 / 微信输入法那边选麦克风也有单独向导。" data-en="For any permission macOS still needs, vRemoter opens the exact settings pane for you—no hunting through System Settings. Selecting the microphone in Doubao or WeChat has its own walkthrough too.">macOS 缺的权限，vRemoter 会直接点进对应的设置页，不用你满屏找。豆包 / 微信输入法那边选麦克风也有单独向导。</p>
         <div class="guide-grid">
           <figure><img src="assets/guides/permission-microphone.png" alt="麦克风权限"><figcaption data-zh="麦克风" data-en="Microphone">麦克风</figcaption></figure>
           <figure><img src="assets/guides/permission-accessibility.png" alt="辅助功能权限"><figcaption data-zh="辅助功能" data-en="Accessibility">辅助功能</figcaption></figure>
           <figure><img src="assets/guides/permission-input-monitoring.png" alt="输入监控权限"><figcaption data-zh="输入监控" data-en="Input Monitoring">输入监控</figcaption></figure>
           <figure><img src="assets/guides/permission-bluetooth.png" alt="蓝牙权限"><figcaption data-zh="蓝牙" data-en="Bluetooth">蓝牙</figcaption></figure>
-          <figure><img src="assets/guides/doubaoinput2.png" alt="豆包麦克风选择"><figcaption data-zh="豆包输入设备" data-en="Doubao input device">豆包输入设备</figcaption></figure>
+          <figure><img src="assets/guides/doubaoinput2.png" alt="豆包麦克风选择"><figcaption data-zh="输入法输入设备" data-en="Input-method input device">输入法输入设备</figcaption></figure>
         </div>
       </div>
     </section>

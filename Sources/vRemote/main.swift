@@ -1,16 +1,16 @@
 // vRemote for macOS.
 //
-// 1. Supported remote voice key → matching Option toggle semantics
-// 2. Remote ATVV + Mac microphone → aligned mix → vRemoteDr 2ch → Doubao
-// 3. A physical Mac Option key controls the same remote microphone session
+// 1. Supported remote voice key → matching input-method voice toggle
+// 2. Remote ATVV + Mac microphone → aligned mix → vRemoteDr 2ch → input method
+// 3. A physical trigger key controls the same remote microphone session
 //
 // macOS-only. Requires:
 //   * X6-Remote or Chromecast Remote paired in System Settings → Bluetooth
 //   * Accessibility permission (System Settings → Privacy & Security →
-//     Accessibility) for Option observation and Search suppression
+//     Accessibility) for trigger observation and Search suppression
 //   * vRemoteDriver.driver installed and visible as vRemoteDr 2ch in
 //     System Settings → Sound → Input/Output
-//   * Doubao IME configured for Option-as-voice-mode trigger
+//   * Doubao or WeChat Input Method configured to match the voice trigger
 //
 // Run:   swift run
 // Quit:  menu bar icon → 退出, or Ctrl+C
@@ -31,6 +31,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var recordingToggleItem: NSMenuItem!
     private var recordingSizeItem: NSMenuItem!
     private var languageItems: [AppLanguage: NSMenuItem] = [:]
+    private var inputMethodItems: [InputMethodTarget: NSMenuItem] = [:]
 
     private var x6HIDConnected = false
     private var x6BLEConnected = false
@@ -45,9 +46,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let x6 = X6HIDBridge()
     private let chromecastHID = ChromecastRemoteHIDBridge()
     private let x6SearchSuppressor = X6SearchSuppressor()
-    private let doubaoAudioState = DoubaoAudioStateMonitor()
+    private let inputMethodAudioState = InputMethodAudioStateMonitor()
     private lazy var x6Session = X6SessionCoordinator(
-        doubaoState: doubaoAudioState
+        inputMethodState: inputMethodAudioState,
+        inputMethodName: { AppStorage.inputMethodTarget.shortName }
     )
     private let debugWindow = DebugWindowController()
     private let updateWindow = UpdateWindowController()
@@ -69,6 +71,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         AppStorage.prepare()
+        inputMethodAudioState.setTarget(AppStorage.inputMethodTarget)
         AppAnalytics.configure()
         // Keep one continuous diagnostic history while X6 is being tuned.
         // Log.swift rotates at 5 MB; only the explicit menu action clears it.
@@ -108,6 +111,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
         menu.addItem(makeControlMenu())
+        menu.addItem(makeInputMethodMenu())
         menu.addItem(makeLogMenu())
         menu.addItem(makeRecordingMenu())
         menu.addItem(makeLanguageMenu())
@@ -410,6 +414,29 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return root
     }
 
+    private func makeInputMethodMenu() -> NSMenuItem {
+        let root = NSMenuItem(
+            title: L10n.text("输入法", "Input Method"),
+            action: nil,
+            keyEquivalent: ""
+        )
+        let submenu = NSMenu(title: L10n.text("输入法", "Input Method"))
+        for target in InputMethodTarget.allCases {
+            let item = NSMenuItem(
+                title: target.displayName,
+                action: #selector(selectInputMethod(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = target.rawValue
+            item.state = AppStorage.inputMethodTarget == target ? .on : .off
+            submenu.addItem(item)
+            inputMethodItems[target] = item
+        }
+        root.submenu = submenu
+        return root
+    }
+
     private func makeRecordingMenu() -> NSMenuItem {
         let root = NSMenuItem(title: L10n.text("调试录音", "Debug recordings"), action: nil, keyEquivalent: "")
         let submenu = NSMenu(title: L10n.text("调试录音", "Debug recordings"))
@@ -482,11 +509,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func updateStatus() {
         let anyHID = x6HIDConnected || chromecastHIDConnected
         let anyBLE = x6BLEConnected || chromecastBLEConnected
-        let doubaoSnapshot = doubaoAudioState.snapshotNow()
-        let doubaoUsesVRemote = doubaoSnapshot.inputDeviceNames.contains("vRemoteDr 2ch")
+        let inputMethodSnapshot = inputMethodAudioState.snapshotNow()
+        let inputMethodUsesVRemote = inputMethodSnapshot.inputDeviceNames.contains("vRemoteDr 2ch")
         let statusText: String
-        if doubaoSnapshot.isRecording && !doubaoUsesVRemote {
-            statusText = L10n.text("豆包输入设备错误", "Incorrect Doubao input")
+        if inputMethodSnapshot.isRecording && !inputMethodUsesVRemote {
+            statusText = L10n.text("\(AppStorage.inputMethodTarget.shortName)输入设备错误", "Incorrect \(AppStorage.inputMethodTarget.shortName) input")
         } else if remoteStreaming {
             statusText = L10n.text("遥控器录音中", "Remote recording")
         } else if anyHID && anyBLE {
@@ -505,8 +532,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             remoteStreaming: remoteStreaming,
             macInputEnabled: AudioPipe.shared.isMacInputEnabled,
             remoteInputEnabled: AudioPipe.shared.isRemoteInputEnabled,
-            doubaoIsRecording: doubaoSnapshot.isRecording,
-            doubaoInput: doubaoSnapshot.deviceSummary,
+            inputMethodIsRecording: inputMethodSnapshot.isRecording,
+            inputMethodInput: inputMethodSnapshot.deviceSummary,
             driverAvailable: AudioPipe.shared.isOutputDeviceAvailable,
             x6Connected: x6HIDConnected || x6BLEConnected,
             chromecastConnected: chromecastHIDConnected || chromecastBLEConnected,
@@ -540,13 +567,19 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.x6BLE.closeMicrophone(force: true)
                 self?.chromecastBLE.closeMicrophone(force: true)
                 self?.debugWindow.updateRemoteLevel(-120)
-            } else if self?.doubaoAudioState.snapshotNow().isRecording == true {
+            } else if self?.inputMethodAudioState.snapshotNow().isRecording == true {
                 self?.openPreferredRemoteMicrophone()
             }
             self?.updateStatus()
         }
         debugWindow.onInputTriggerChanged = { [weak self] in
             self?.x6SearchSuppressor.triggerConfigurationDidChange()
+        }
+        debugWindow.onInputMethodTargetChanged = { [weak self] target in
+            self?.x6Session.forceClose()
+            self?.inputMethodAudioState.setTarget(target)
+            self?.x6SearchSuppressor.triggerConfigurationDidChange()
+            self?.updateStatus()
         }
         debugWindow.onRemoteMappingEnabledChanged = { [weak self] remote, enabled in
             switch remote {
@@ -669,10 +702,26 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         chromecastBLE.closeMicrophone(force: true)
     }
 
+    @objc private func selectInputMethod(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let target = InputMethodTarget(rawValue: raw),
+              target != AppStorage.inputMethodTarget
+        else { return }
+        AppStorage.inputMethodTarget = target
+        x6Session.forceClose()
+        inputMethodAudioState.setTarget(target)
+        x6SearchSuppressor.triggerConfigurationDidChange()
+        updateStatus()
+        refreshMenuState()
+    }
+
     private func refreshMenuState() {
         launchAtLoginItem?.state = LaunchAtLogin.isEnabled ? .on : .off
         loggingToggleItem?.state = Log.isEnabled ? .on : .off
         recordingToggleItem?.state = AppStorage.recordingEnabled ? .on : .off
+        for (target, item) in inputMethodItems {
+            item.state = AppStorage.inputMethodTarget == target ? .on : .off
+        }
         refreshSizeLabels()
     }
 

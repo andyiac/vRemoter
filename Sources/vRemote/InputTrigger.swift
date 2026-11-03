@@ -50,39 +50,103 @@ enum Key {
     /// keyboards, Bluetooth buttons, and external remappers.
     static let syntheticMarker: Int64 = 0x4D_49_52_42 // "MIRB"
 
-    static func triggerDown(_ trigger: InputTriggerKey = AppStorage.inputTriggerKey) {
+    static func triggerDown(
+        _ trigger: InputTriggerKey = AppStorage.effectiveInputTriggerKey
+    ) {
         post(trigger: trigger, keyDown: true)
     }
 
-    static func triggerUp(_ trigger: InputTriggerKey = AppStorage.inputTriggerKey) {
+    static func triggerUp(
+        _ trigger: InputTriggerKey = AppStorage.effectiveInputTriggerKey
+    ) {
         post(trigger: trigger, keyDown: false)
     }
 
-    /// A deliberate short modifier click for Doubao's toggle mode.
+    /// One deliberate voice toggle for the selected input method.
+    ///
+    /// Doubao uses a short modifier click for its toggle mode. WeChat 2.0+
+    /// uses a hands-free shortcut (modifier + Space by default), so the same
+    /// remote gesture is translated into that chord instead.
     static func triggerTap(
-        _ trigger: InputTriggerKey = AppStorage.inputTriggerKey,
+        _ trigger: InputTriggerKey = AppStorage.effectiveInputTriggerKey,
         completion: (() -> Void)? = nil
     ) {
-        triggerDown(trigger)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
-            triggerUp(trigger)
-            completion?()
+        switch AppStorage.inputMethodTarget.voiceTriggerStyle {
+        case .singleModifierTap:
+            triggerDown(trigger)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+                triggerUp(trigger)
+                completion?()
+            }
+
+        case .handsFreeChord:
+            postHandsFreeChord(modifier: trigger, completion: completion)
         }
     }
 
-    private static func post(trigger: InputTriggerKey, keyDown: Bool) {
+    /// WeChat Input Method's hands-free mode is opened and closed by the same
+    /// shortcut. The default is Fn + Space; the user must keep WeChat's
+    /// hands-free shortcut in sync with the modifier selected in vRemoter.
+    private static func postHandsFreeChord(
+        modifier: InputTriggerKey,
+        completion: (() -> Void)?
+    ) {
+        post(
+            keyCode: modifier.primaryKeyCode,
+            flags: modifier.flag,
+            keyDown: true
+        )
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+            post(keyCode: 0x31, flags: modifier.flag, keyDown: true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+                post(keyCode: 0x31, flags: modifier.flag, keyDown: false)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+                    post(
+                        keyCode: modifier.primaryKeyCode,
+                        flags: [],
+                        keyDown: false
+                    )
+                    print(
+                        "[KEY] synthetic \(modifier.title) + Space " +
+                        "hands-free toggle"
+                    )
+                    completion?()
+                }
+            }
+        }
+    }
+
+    private static func post(
+        trigger: InputTriggerKey,
+        keyDown: Bool
+    ) {
+        post(
+            keyCode: trigger.primaryKeyCode,
+            flags: keyDown ? trigger.flag : [],
+            keyDown: keyDown
+        )
+    }
+
+    private static func post(
+        keyCode: CGKeyCode,
+        flags: CGEventFlags,
+        keyDown: Bool
+    ) {
         let source = CGEventSource(stateID: .hidSystemState)
         guard let event = CGEvent(
             keyboardEventSource: source,
-            virtualKey: trigger.primaryKeyCode,
+            virtualKey: keyCode,
             keyDown: keyDown
         ) else { return }
-        event.flags = keyDown ? trigger.flag : []
+        event.flags = flags
         event.setIntegerValueField(.eventSourceUserData, value: syntheticMarker)
         event.post(tap: .cghidEventTap)
         print(
-            "[KEY] synthetic \(trigger.title) " +
-            (keyDown ? "DOWN" : "UP")
+            "[KEY] synthetic keyCode=0x" +
+            String(keyCode, radix: 16) +
+            " " +
+            (keyDown ? "DOWN" : "UP") +
+            " flags=0x" + String(flags.rawValue, radix: 16)
         )
     }
 }

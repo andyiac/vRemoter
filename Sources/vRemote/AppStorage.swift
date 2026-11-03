@@ -6,6 +6,8 @@ enum AppStorage {
     static let macInputEnabledKey = "macInputEnabled"
     static let remoteInputEnabledKey = "remoteInputEnabled"
     static let inputTriggerKeyKey = "inputTriggerKey"
+    static let inputMethodTargetKey = "inputMethodTarget"
+    static let wechatInputTriggerKeyKey = "wechatInputTriggerKey"
 
     static let logsDirectory: URL = {
         FileManager.default.homeDirectoryForCurrentUser
@@ -28,12 +30,30 @@ enum AppStorage {
     }()
 
     static func prepare() {
+        // First launch: prefer whichever input method is actually installed.
+        // Existing installations keep their saved choice.
+        if UserDefaults.standard.string(forKey: inputMethodTargetKey) == nil {
+            let installed = InputMethodTarget.installedTargets
+            let preferred: InputMethodTarget
+            if installed.contains(.doubao) || installed.isEmpty {
+                preferred = .doubao
+            } else {
+                preferred = installed[0]
+            }
+            UserDefaults.standard.set(
+                preferred.rawValue,
+                forKey: inputMethodTargetKey
+            )
+        }
+
         UserDefaults.standard.register(defaults: [
             loggingEnabledKey: false,
             recordingEnabledKey: false,
             macInputEnabledKey: true,
             remoteInputEnabledKey: true,
-            inputTriggerKeyKey: InputTriggerKey.option.rawValue,
+            inputTriggerKeyKey: InputMethodTarget.doubao.defaultTriggerKey.rawValue,
+            wechatInputTriggerKeyKey: InputMethodTarget.wechat.defaultTriggerKey.rawValue,
+            inputMethodTargetKey: InputMethodTarget.doubao.rawValue,
         ])
         ensureDirectory(logsDirectory)
         ensureDirectory(applicationSupportDirectory)
@@ -69,6 +89,50 @@ enum AppStorage {
         }
         set {
             UserDefaults.standard.set(newValue.rawValue, forKey: inputTriggerKeyKey)
+        }
+    }
+
+    static var inputMethodTarget: InputMethodTarget {
+        get {
+            let raw = UserDefaults.standard.string(forKey: inputMethodTargetKey)
+            return InputMethodTarget(rawValue: raw ?? "") ?? .doubao
+        }
+        set {
+            UserDefaults.standard.set(
+                newValue.rawValue,
+                forKey: inputMethodTargetKey
+            )
+        }
+    }
+
+    static var wechatInputTriggerKey: InputTriggerKey {
+        get {
+            let raw = UserDefaults.standard.string(forKey: wechatInputTriggerKeyKey)
+            return InputTriggerKey(rawValue: raw ?? "") ?? .function
+        }
+        set {
+            UserDefaults.standard.set(
+                newValue.rawValue,
+                forKey: wechatInputTriggerKeyKey
+            )
+        }
+    }
+
+    /// The trigger key for the currently selected input method. Doubao and
+    /// WeChat keep independent trigger settings so switching targets never
+    /// silently changes the other input method's configuration.
+    static var effectiveInputTriggerKey: InputTriggerKey {
+        get {
+            switch inputMethodTarget {
+            case .doubao: inputTriggerKey
+            case .wechat: wechatInputTriggerKey
+            }
+        }
+        set {
+            switch inputMethodTarget {
+            case .doubao: inputTriggerKey = newValue
+            case .wechat: wechatInputTriggerKey = newValue
+            }
         }
     }
 
