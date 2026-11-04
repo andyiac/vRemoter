@@ -41,6 +41,9 @@ final class BLEBridge: NSObject {
     var onMicrophoneOpenFailed: ((UInt16 /* code */) -> Void)?
     /// Called when the device connection state changes.
     var onConnectionChanged: ((Bool) -> Void)?
+    /// Called when the remote still holds a stale bond with this Mac, so the
+    /// user has to forget it in System Settings and pair again.
+    var onPairingRequired: (() -> Void)?
     /// Audio level meter update; arg is dBFS in [-60, 0].
     var onLevel: ((Double, Int /* peak */) -> Void)?
 
@@ -54,6 +57,7 @@ final class BLEBridge: NSObject {
     private var capabilitiesRequested = false
     private var connectedPeripheralID: UUID?
     private var connectTimeout: DispatchWorkItem?
+    private var pairingRequiredNotified = false
 
     private let protocolHandler = ATVVProtocol()
     private var streamID: UInt8 = 0
@@ -293,18 +297,53 @@ final class BLEBridge: NSObject {
         saveUUID(p.identifier)
         print("[\(logTag)] 连接 \(p.name ?? "(no name)") (\(p.identifier))…")
 
-        guard allowTimeoutFallback else { return }
+        // CoreBluetooth does not always deliver didFailToConnect, especially
+        // when the peripheral still advertises but the bond is gone. Without a
+        // timeout the bridge can sit in "connecting" forever and never scan
+        // again, which looks like a dead remote in the UI.
         let id = p.identifier
+        let interval: TimeInterval = allowTimeoutFallback ? 4.0 : 6.0
         let work = DispatchWorkItem { [weak self, weak p] in
-            guard let self, self.connectedPeripheralID != id else { return }
-            print("[\(self.logTag)] 已存 UUID 连接超时，改为扫描新设备")
+            guard let self, self.isStarted, self.connectedPeripheralID != id else { return }
+            print("[\(self.logTag)] 连接超时，取消后重新扫描")
             if let p {
                 self.central.cancelPeripheralConnection(p)
             }
+            self.peripheral = nil
+            self.connectTimeout = nil
             self.beginScan()
         }
         connectTimeout = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + interval, execute: work)
+    }
+
+    /// True when macOS still has a bond entry but the remote dropped its side
+    /// of it (typical after pairing the same remote to another host). The
+    /// connect attempt can never succeed until the user re-pairs.
+    private func isPairingInformationLost(_ error: Error?) -> Bool {
+        guard let error = error as NSError? else { return false }
+        return error.domain == CBErrorDomain
+            && error.code == CBError.Code.peerRemovedPairingInformation.rawValue
+    }
+
+    private func notePairingInformationLost() {
+        // The cached UUID is not the problem, but dropping it keeps the next
+        // launch from trying a peripheral that needs a fresh pairing anyway.
+        try? FileManager.default.removeItem(atPath: savedUUIDPath)
+        guard !pairingRequiredNotified else { return }
+        pairingRequiredNotified = true
+        print(
+            "[\(logTag)] 配对信息已失效：请在系统设置 → 蓝牙中移除并重新配对 " +
+            "\(nameHint ?? "遥控器")"
+        )
+        onPairingRequired?()
+    }
+
+    private func scheduleScan(after delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.isStarted else { return }
+            self.beginScan()
+        }
     }
 
     private func matches(_ candidate: CBPeripheral) -> Bool {
@@ -444,6 +483,7 @@ extension BLEBridge: CBCentralManagerDelegate {
         connectTimeout = nil
         connectedPeripheralID = peripheral.identifier
         hasResetSessionForConnection = false
+        pairingRequiredNotified = false
         print("[\(logTag)] 已连接")
         onConnectionChanged?(true)
         peripheral.discoverServices([Self.serviceUUID])
@@ -456,8 +496,14 @@ extension BLEBridge: CBCentralManagerDelegate {
         connectTimeout = nil
         connectedPeripheralID = nil
         print("[\(logTag)] 连接失败: \(error?.localizedDescription ?? "unknown")")
+        let pairingLost = isPairingInformationLost(error)
+        if pairingLost {
+            notePairingInformationLost()
+        }
         onConnectionChanged?(false)
-        beginScan()
+        // Back off after a bond failure: retrying immediately just spins
+        // through scan → connect → fail until the user re-pairs.
+        scheduleScan(after: pairingLost ? 10 : 0)
     }
 
     func centralManager(_ central: CBCentralManager,
@@ -469,11 +515,13 @@ extension BLEBridge: CBCentralManagerDelegate {
         closeTimeoutWorkItem = nil
         connectedPeripheralID = nil
         print("[\(logTag)] 断开: \(error?.localizedDescription ?? "ok")")
+        let pairingLost = isPairingInformationLost(error)
+        if pairingLost {
+            notePairingInformationLost()
+        }
         onConnectionChanged?(false)
         finishAudioStreamLocally(reason: 0xFC)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-            self?.beginScan()
-        }
+        scheduleScan(after: pairingLost ? 10 : 2)
     }
 }
 

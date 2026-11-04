@@ -39,6 +39,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var chromecastHIDConnected = false
     private var chromecastBLEConnected = false
     private var chromecastRemoteStreaming = false
+    private var x6BLEPairingRequired = false
+    private var chromecastBLEPairingRequired = false
     private var remoteStreaming = false
 
     private var lastVoiceRemote: VoiceRemoteID?
@@ -173,6 +175,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         x6BLE.onConnectionChanged = { [weak self] connected in
             self?.x6BLEConnected = connected
+            if connected {
+                self?.x6BLEPairingRequired = false
+            }
             AppAnalytics.signal(
                 connected ? "Remote.BLE.connected" : "Remote.BLE.disconnected"
             )
@@ -181,6 +186,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.x6Session.remoteDisconnected(.x6)
             }
             self?.refreshCombinedStreaming()
+            self?.updateStatus()
+        }
+        x6BLE.onPairingRequired = { [weak self] in
+            self?.x6BLEPairingRequired = true
             self?.updateStatus()
         }
         x6BLE.onStreamingChanged = { [weak self] streaming, _ in
@@ -220,6 +229,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         chromecastBLE.onConnectionChanged = { [weak self] connected in
             self?.chromecastBLEConnected = connected
+            if connected {
+                self?.chromecastBLEPairingRequired = false
+            }
             AppAnalytics.signal(
                 connected
                     ? "Remote.Chromecast.BLE.connected"
@@ -230,6 +242,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.x6Session.remoteDisconnected(.chromecast)
             }
             self?.refreshCombinedStreaming()
+            self?.updateStatus()
+        }
+        chromecastBLE.onPairingRequired = { [weak self] in
+            self?.chromecastBLEPairingRequired = true
             self?.updateStatus()
         }
         chromecastBLE.onStreamingChanged = { [weak self] streaming, _ in
@@ -509,6 +525,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func updateStatus() {
         let anyHID = x6HIDConnected || chromecastHIDConnected
         let anyBLE = x6BLEConnected || chromecastBLEConnected
+        let pairingRequired = x6BLEPairingRequired || chromecastBLEPairingRequired
         let inputMethodSnapshot = inputMethodAudioState.snapshotNow()
         let inputMethodUsesVRemote = inputMethodSnapshot.inputDeviceNames.contains("vRemoteDr 2ch")
         let statusText: String
@@ -516,6 +533,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             statusText = L10n.text("\(AppStorage.inputMethodTarget.shortName)输入设备错误", "Incorrect \(AppStorage.inputMethodTarget.shortName) input")
         } else if remoteStreaming {
             statusText = L10n.text("遥控器录音中", "Remote recording")
+        } else if pairingRequired {
+            statusText = L10n.text("遥控器需要重新配对", "Remote needs re-pairing")
         } else if anyHID && anyBLE {
             statusText = L10n.text("已就绪", "Ready")
         } else if anyHID || anyBLE {
@@ -537,6 +556,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             driverAvailable: AudioPipe.shared.isOutputDeviceAvailable,
             x6Connected: x6HIDConnected || x6BLEConnected,
             chromecastConnected: chromecastHIDConnected || chromecastBLEConnected,
+            pairingRequired: pairingRequired,
             macLevelDB: nil,
             remoteLevelDB: nil
         )

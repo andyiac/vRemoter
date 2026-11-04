@@ -292,6 +292,7 @@ private final class ConsoleViewModel: ObservableObject {
     @Published var bluetoothGranted = false
     @Published var x6Connected = false
     @Published var chromecastConnected = false
+    @Published var pairingRequired = false
     @Published var inputMethodTarget = AppStorage.inputMethodTarget
     @Published var inputTriggerKey = AppStorage.effectiveInputTriggerKey
     @Published var activeModal: ConsoleModal?
@@ -577,6 +578,7 @@ final class DebugWindowController: NSWindowController, NSWindowDelegate {
         driverAvailable: Bool,
         x6Connected: Bool,
         chromecastConnected: Bool,
+        pairingRequired: Bool = false,
         macLevelDB: Double? = nil,
         remoteLevelDB: Double? = nil
     ) {
@@ -595,6 +597,7 @@ final class DebugWindowController: NSWindowController, NSWindowDelegate {
             self.model.driverAvailable = driverAvailable
             self.model.x6Connected = x6Connected
             self.model.chromecastConnected = chromecastConnected
+            self.model.pairingRequired = pairingRequired
             if let macLevelDB { self.model.macLevelDB = macLevelDB }
             if let remoteLevelDB { self.model.remoteLevelDB = remoteLevelDB }
             self.model.refreshPermissions()
@@ -873,6 +876,12 @@ private struct StudioMixerView: View {
         }
         if model.hidConnected || model.bleConnected {
             return L10n.text("正在连接语音服务", "Connecting voice service")
+        }
+        if model.pairingRequired {
+            return L10n.text(
+                "需要在系统蓝牙中移除并重新配对",
+                "Remove in Bluetooth settings and pair again"
+            )
         }
         return L10n.text("HID 与 BLE 未连接", "HID and BLE disconnected")
     }
