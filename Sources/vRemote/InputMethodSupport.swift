@@ -47,12 +47,13 @@ enum InputMethodTarget: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Default modifier for the voice trigger. Doubao toggles on a single
-    /// modifier tap; WeChat uses modifier + Space for its hands-free mode.
+    /// Default modifier for the voice trigger. Both input methods toggle on a
+    /// single modifier tap. WeChat uses a right-Command tap (not its ⌘+Space
+    /// hands-free chord) to avoid colliding with macOS Spotlight (⌘Space).
     var defaultTriggerKey: InputTriggerKey {
         switch self {
         case .doubao: .option
-        case .wechat: .function
+        case .wechat: .command
         }
     }
 
@@ -60,7 +61,10 @@ enum InputMethodTarget: String, CaseIterable, Identifiable {
     var voiceTriggerStyle: VoiceTriggerStyle {
         switch self {
         case .doubao: .singleModifierTap
-        case .wechat: .handsFreeChord
+        // A single right-Command tap, instead of WeChat's modifier+Space
+        // hands-free chord, so the remote voice key does not trigger macOS
+        // Spotlight (⌘Space). WeChat must be set to toggle voice on this key.
+        case .wechat: .singleModifierTap
         }
     }
 

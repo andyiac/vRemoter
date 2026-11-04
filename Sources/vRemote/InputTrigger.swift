@@ -13,7 +13,7 @@ enum InputTriggerKey: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .option: "Option (⌥)"
-        case .command: "Command (⌘)"
+        case .command: "Right Command (⌘)"
         case .control: "Control (⌃)"
         case .shift: "Shift (⇧)"
         case .function: "Fn / Globe"
@@ -23,7 +23,7 @@ enum InputTriggerKey: String, CaseIterable, Identifiable {
     var keyCodes: Set<Int64> {
         switch self {
         case .option: [0x3A, 0x3D]
-        case .command: [0x37, 0x36]
+        case .command: [0x36] // Right Command only; left ⌘ stays free for normal shortcuts.
         case .control: [0x3B, 0x3E]
         case .shift: [0x38, 0x3C]
         case .function: [0x3F]
@@ -41,6 +41,25 @@ enum InputTriggerKey: String, CaseIterable, Identifiable {
         case .control: .maskControl
         case .shift: .maskShift
         case .function: .maskSecondaryFn
+        }
+    }
+
+    /// Device-dependent modifier mask (NX_DEVICE*…KEYMASK) matching the primary
+    /// synthesized key code. Real left/right modifier presses set this
+    /// side-specific bit on top of the generic mask; input methods that bind a
+    /// specific side (e.g. WeChat's right-Command voice trigger) ignore
+    /// synthetic events that lack it, so we must include it when posting.
+    var primaryDeviceFlag: CGEventFlags {
+        switch primaryKeyCode {
+        case 0x3B: CGEventFlags(rawValue: 0x00000001) // left control
+        case 0x3E: CGEventFlags(rawValue: 0x00002000) // right control
+        case 0x38: CGEventFlags(rawValue: 0x00000002) // left shift
+        case 0x3C: CGEventFlags(rawValue: 0x00000004) // right shift
+        case 0x37: CGEventFlags(rawValue: 0x00000008) // left command
+        case 0x36: CGEventFlags(rawValue: 0x00000010) // right command
+        case 0x3A: CGEventFlags(rawValue: 0x00000020) // left option
+        case 0x3D: CGEventFlags(rawValue: 0x00000040) // right option
+        default: [] // Fn / Globe has no side-specific device bit
         }
     }
 }
@@ -122,7 +141,7 @@ enum Key {
     ) {
         post(
             keyCode: trigger.primaryKeyCode,
-            flags: keyDown ? trigger.flag : [],
+            flags: keyDown ? trigger.flag.union(trigger.primaryDeviceFlag) : [],
             keyDown: keyDown
         )
     }

@@ -51,6 +51,7 @@ final class BLEBridge: NSObject {
     private var commandChar: CBCharacteristic?
     private var controlChar: CBCharacteristic?
     private var atvvCharsComplete = false
+    private var capabilitiesRequested = false
     private var connectedPeripheralID: UUID?
     private var connectTimeout: DispatchWorkItem?
 
@@ -124,6 +125,8 @@ final class BLEBridge: NSObject {
         audioChar = nil
         commandChar = nil
         controlChar = nil
+        atvvCharsComplete = false
+        capabilitiesRequested = false
     }
 
     func setRecordingEnabled(_ enabled: Bool) {
@@ -533,10 +536,14 @@ extension BLEBridge: CBPeripheralDelegate {
             }
         }
         if atvvCharsComplete {
-            // All three ATVV chars found: kick off capabilities handshake.
-            writeCommand(protocolHandler.getCapabilitiesCommand)
-            print("[\(logTag)] TX getCapabilities")
             atvvCharsComplete = false
+            // Defer the capabilities handshake until a reply-bearing
+            // characteristic is actually notifying (see
+            // maybeRequestCapabilities). Firing it here — right after
+            // setNotifyValue, while isNotifying is still false — drops the
+            // reply and stalls ATVV negotiation. This immediate call only
+            // sends when a subscription was already active on reconnect.
+            maybeRequestCapabilities()
         }
     }
 
@@ -548,6 +555,39 @@ extension BLEBridge: CBPeripheralDelegate {
         if p.contains(.notify) { parts.append("notify") }
         if p.contains(.indicate) { parts.append("indicate") }
         return parts.joined(separator: ",")
+    }
+
+    func peripheral(_ peripheral: CBPeripheral,
+                    didUpdateNotificationStateFor characteristic: CBCharacteristic,
+                    error: Error?) {
+        if let error {
+            print(
+                "[\(logTag)]   notify state error " +
+                "\(characteristic.uuid.uuidString.prefix(8)): " +
+                error.localizedDescription
+            )
+            return
+        }
+        print(
+            "[\(logTag)]   notify ready " +
+            "\(characteristic.uuid.uuidString.prefix(8)); " +
+            "isNotifying=\(characteristic.isNotifying)"
+        )
+        maybeRequestCapabilities()
+    }
+
+    /// Send the ATVV getCapabilities handshake exactly once, and only after a
+    /// characteristic that carries the reply is actively notifying. Sending it
+    /// right after setNotifyValue — while isNotifying is still false — drops the
+    /// reply and stalls negotiation ("尚未完成 ATVV capabilities 协商").
+    private func maybeRequestCapabilities() {
+        guard !capabilitiesRequested else { return }
+        let controlReady = controlChar?.isNotifying == true
+        let commandReady = commandChar?.isNotifying == true
+        guard controlReady || commandReady else { return }
+        capabilitiesRequested = true
+        writeCommand(protocolHandler.getCapabilitiesCommand)
+        print("[\(logTag)] TX getCapabilities")
     }
 
     func peripheral(_ peripheral: CBPeripheral,

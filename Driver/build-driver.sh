@@ -39,9 +39,18 @@ perl -0777 -pi -e '
 
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier audio.local.vRemoteDriver2chXX" "$PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName vRemote Driver" "$PLIST"
-/usr/libexec/PlistBuddy -c "Delete :CFPlugInFactories:9CAC157F-784A-4552-A1DE-0B9840FC974C" "$PLIST"
-/usr/libexec/PlistBuddy -c "Add :CFPlugInFactories:B7C4C615-9E72-4C83-A329-71C4E50E4A91 string BlackHole_Create" "$PLIST"
-/usr/libexec/PlistBuddy -c "Set :CFPlugInTypes:443ABAB8-E7B3-491A-B985-BEB9187030DB:0 B7C4C615-9E72-4C83-A329-71C4E50E4A91" "$PLIST"
+# Give the copy a distinct plug-in factory UUID so it never collides with the
+# installed BlackHole in CoreAudio. Rebuild both dictionaries from scratch so
+# this works regardless of the source BlackHole version's factory UUID.
+NEW_FACTORY_UUID="B7C4C615-9E72-4C83-A329-71C4E50E4A91"
+PLUGIN_TYPE_UUID="443ABAB8-E7B3-491A-B985-BEB9187030DB"
+/usr/libexec/PlistBuddy -c "Delete :CFPlugInFactories" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :CFPlugInFactories dict" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :CFPlugInFactories:$NEW_FACTORY_UUID string BlackHole_Create" "$PLIST"
+/usr/libexec/PlistBuddy -c "Delete :CFPlugInTypes" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :CFPlugInTypes dict" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :CFPlugInTypes:$PLUGIN_TYPE_UUID array" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :CFPlugInTypes:$PLUGIN_TYPE_UUID:0 string $NEW_FACTORY_UUID" "$PLIST"
 
 codesign --force --deep --sign - --timestamp=none "$OUTPUT_DRIVER"
 
