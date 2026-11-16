@@ -120,6 +120,10 @@ enum RemoteMappingTarget: String, CaseIterable, Identifiable, Codable, Hashable 
     case commandC
     case commandV
     case commandZ
+    case paneLeft
+    case paneRight
+    case paneUp
+    case paneDown
     case custom
 
     var id: String { rawValue }
@@ -154,6 +158,10 @@ enum RemoteMappingTarget: String, CaseIterable, Identifiable, Codable, Hashable 
         case .commandC: L10n.text("复制 (⌘C)", "Copy (⌘C)")
         case .commandV: L10n.text("粘贴 (⌘V)", "Paste (⌘V)")
         case .commandZ: L10n.text("撤销 (⌘Z)", "Undo (⌘Z)")
+        case .paneLeft: L10n.text("分屏 ← (⌘⌥←)", "Pane ← (⌘⌥←)")
+        case .paneRight: L10n.text("分屏 → (⌘⌥→)", "Pane → (⌘⌥→)")
+        case .paneUp: L10n.text("分屏 ↑ (⌘⌥↑)", "Pane ↑ (⌘⌥↑)")
+        case .paneDown: L10n.text("分屏 ↓ (⌘⌥↓)", "Pane ↓ (⌘⌥↓)")
         case .custom: L10n.text("录制任意按键…", "Record a key…")
         }
     }
@@ -178,6 +186,10 @@ enum RemoteMappingTarget: String, CaseIterable, Identifiable, Codable, Hashable 
         case .commandC: (0x08, [.maskCommand])
         case .commandV: (0x09, [.maskCommand])
         case .commandZ: (0x06, [.maskCommand])
+        case .paneLeft: (0x7B, [.maskCommand, .maskAlternate])
+        case .paneRight: (0x7C, [.maskCommand, .maskAlternate])
+        case .paneUp: (0x7E, [.maskCommand, .maskAlternate])
+        case .paneDown: (0x7D, [.maskCommand, .maskAlternate])
         default: nil
         }
     }
