@@ -98,6 +98,7 @@ enum RemoteProfiles {
 enum RemoteMappingTarget: String, CaseIterable, Identifiable, Codable, Hashable {
     case disabled
     case doubaoVoice
+    case openApp
     case arrowUp
     case arrowDown
     case arrowLeft
@@ -163,6 +164,7 @@ enum RemoteMappingTarget: String, CaseIterable, Identifiable, Codable, Hashable 
         case .paneUp: L10n.text("分屏 ↑ (⌘⌥↑)", "Pane ↑ (⌘⌥↑)")
         case .paneDown: L10n.text("分屏 ↓ (⌘⌥↓)", "Pane ↓ (⌘⌥↓)")
         case .custom: L10n.text("录制任意按键…", "Record a key…")
+        case .openApp: L10n.text("打开 App…", "Open App…")
         }
     }
 
@@ -205,7 +207,7 @@ enum RemoteMappingTarget: String, CaseIterable, Identifiable, Codable, Hashable 
     }
 
     func post(isDown: Bool) {
-        guard self != .disabled, self != .doubaoVoice else { return }
+        guard self != .disabled, self != .doubaoVoice, self != .openApp else { return }
         if let keyboard {
             let source = CGEventSource(stateID: .hidSystemState)
             guard let event = CGEvent(
@@ -260,6 +262,52 @@ struct RemoteCustomShortcut: Codable, Hashable {
     }
 }
 
+struct RemoteAppTarget: Codable, Hashable {
+    let bundleID: String
+    let displayName: String
+}
+
+enum AppLauncher {
+    /// Brings the target app to the front, launching it when it is not running.
+    /// LaunchServices handles both cases and is more reliable than
+    /// `NSRunningApplication.activate` for a background accessory app, which
+    /// macOS 14+ may reject under cooperative activation.
+    static func open(_ target: RemoteAppTarget) {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        configuration.addsToRecentItems = false
+
+        if let url = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: target.bundleID
+        ) {
+            NSWorkspace.shared.openApplication(
+                at: url,
+                configuration: configuration
+            ) { _, error in
+                guard let error else { return }
+                Log.write(
+                    "[MAPPING] open app \(target.displayName) failed: " +
+                    error.localizedDescription
+                )
+                NSSound.beep()
+            }
+            return
+        }
+
+        // Apps started outside LaunchServices (e.g. from a mounted image) still
+        // show up here.
+        if let running = NSRunningApplication.runningApplications(
+            withBundleIdentifier: target.bundleID
+        ).first {
+            running.activate(options: [.activateAllWindows])
+            return
+        }
+
+        Log.write("[MAPPING] app not found: \(target.bundleID)")
+        NSSound.beep()
+    }
+}
+
 final class RemoteMappingStore: ObservableObject {
     static let shared = RemoteMappingStore()
 
@@ -268,6 +316,7 @@ final class RemoteMappingStore: ObservableObject {
     private let prefix = "remoteMapping."
     private let enabledPrefix = "remoteMappingEnabled."
     private let customPrefix = "remoteCustomMapping."
+    private let appPrefix = "remoteAppMapping."
 
     private init() {}
 
@@ -327,6 +376,26 @@ final class RemoteMappingStore: ObservableObject {
         }
     }
 
+    func appTarget(
+        for button: RemoteButtonDefinition,
+        remote: SupportedRemoteID
+    ) -> RemoteAppTarget? {
+        let key = appPrefix + remote.rawValue + "." + button.id
+        guard let data = defaults.data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(RemoteAppTarget.self, from: data)
+    }
+
+    func setAppTarget(
+        _ app: RemoteAppTarget,
+        for button: RemoteButtonDefinition,
+        remote: SupportedRemoteID
+    ) {
+        let key = appPrefix + remote.rawValue + "." + button.id
+        guard let data = try? JSONEncoder().encode(app) else { return }
+        defaults.set(data, forKey: key)
+        setTarget(.openApp, for: button, remote: remote)
+    }
+
     func targetTitle(
         for button: RemoteButtonDefinition,
         remote: SupportedRemoteID
@@ -335,6 +404,10 @@ final class RemoteMappingStore: ObservableObject {
         if value == .custom,
            let shortcut = customShortcut(for: button, remote: remote) {
             return shortcut.label
+        }
+        if value == .openApp,
+           let app = appTarget(for: button, remote: remote) {
+            return L10n.text("打开 \(app.displayName)", "Open \(app.displayName)")
         }
         return value.title
     }
@@ -345,9 +418,15 @@ final class RemoteMappingStore: ObservableObject {
         isDown: Bool
     ) {
         let value = target(for: button, remote: remote)
-        if value == .custom {
+        switch value {
+        case .custom:
             customShortcut(for: button, remote: remote)?.post(isDown: isDown)
-        } else {
+        case .openApp:
+            // Launches on press only; the release carries no action.
+            guard isDown, let app = appTarget(for: button, remote: remote)
+            else { return }
+            AppLauncher.open(app)
+        default:
             value.post(isDown: isDown)
         }
     }
@@ -359,6 +438,9 @@ final class RemoteMappingStore: ObservableObject {
             )
             defaults.removeObject(
                 forKey: customPrefix + remote.rawValue + "." + button.id
+            )
+            defaults.removeObject(
+                forKey: appPrefix + remote.rawValue + "." + button.id
             )
         }
         revision += 1

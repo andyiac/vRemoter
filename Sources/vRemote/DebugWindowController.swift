@@ -4,6 +4,7 @@ import AVFoundation
 import CoreBluetooth
 import CoreGraphics
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum PermissionKind: String, Identifiable, CaseIterable {
     case inputMethod
@@ -1258,20 +1259,19 @@ private struct MappingRow: View {
                         selection: Binding(
                             get: { mappings.target(for: button, remote: remote) },
                             set: { target in
-                                if target == .custom {
+                                switch target {
+                                case .custom:
                                     showRecorder = true
-                                } else {
+                                case .openApp:
+                                    chooseApp()
+                                default:
                                     mappings.setTarget(target, for: button, remote: remote)
                                 }
                             }
                         )
                     ) {
                         ForEach(RemoteMappingTarget.allCases.filter { $0 != .doubaoVoice }) { target in
-                            Text(
-                                target == .custom
-                                    ? mappings.targetTitle(for: button, remote: remote)
-                                    : target.title
-                            ).tag(target)
+                            Text(itemTitle(target)).tag(target)
                         }
                     }
                     .labelsHidden()
@@ -1283,6 +1283,13 @@ private struct MappingRow: View {
                         .buttonStyle(.plain)
                         .foregroundStyle(ConsoleTheme.green)
                         .help(L10n.text("重新录制按键", "Record again"))
+                    } else if mappings.target(for: button, remote: remote) == .openApp {
+                        Button { chooseApp() } label: {
+                            Image(systemName: "folder")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(ConsoleTheme.green)
+                        .help(L10n.text("重新选择 App", "Choose another app"))
                     }
                 }
             }
@@ -1306,6 +1313,55 @@ private struct MappingRow: View {
                 }
             )
         }
+    }
+
+    /// Per-item label. Using `targetTitle` here would make the recorded
+    /// shortcut and the chosen app share one label, since it always reports
+    /// the row's current target.
+    private func itemTitle(_ target: RemoteMappingTarget) -> String {
+        switch target {
+        case .custom:
+            return mappings.customShortcut(for: button, remote: remote)?.label
+                ?? target.title
+        case .openApp:
+            guard let app = mappings.appTarget(for: button, remote: remote)
+            else { return target.title }
+            return L10n.text("打开 \(app.displayName)", "Open \(app.displayName)")
+        default:
+            return target.title
+        }
+    }
+
+    private func chooseApp() {
+        let panel = NSOpenPanel()
+        panel.title = L10n.text("选择 App", "Choose an App")
+        panel.prompt = L10n.text("选择", "Choose")
+        panel.directoryURL = URL(
+            fileURLWithPath: "/Applications",
+            isDirectory: true
+        )
+        panel.allowedContentTypes = [.application]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.resolvesAliases = true
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let bundle = Bundle(url: url),
+              let bundleID = bundle.bundleIdentifier
+        else {
+            NSSound.beep()
+            return
+        }
+        let displayName =
+            (bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+            ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String)
+            ?? url.deletingPathExtension().lastPathComponent
+        mappings.setAppTarget(
+            RemoteAppTarget(bundleID: bundleID, displayName: displayName),
+            for: button,
+            remote: remote
+        )
     }
 }
 
