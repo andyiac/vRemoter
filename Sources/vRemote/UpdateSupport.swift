@@ -214,19 +214,6 @@ private final class UpdateWindowModel: ObservableObject {
 
     let currentVersion: String
     private let service: GitHubUpdateService
-    private static let automaticUpdatesKey = "vRemoter.automaticUpdates"
-
-    var automaticUpdates: Bool {
-        get {
-            let defaults = UserDefaults.standard
-            guard defaults.object(forKey: Self.automaticUpdatesKey) != nil else { return true }
-            return defaults.bool(forKey: Self.automaticUpdatesKey)
-        }
-        set {
-            objectWillChange.send()
-            UserDefaults.standard.set(newValue, forKey: Self.automaticUpdatesKey)
-        }
-    }
 
     init(releasesURL: URL, currentVersion: String) {
         self.currentVersion = currentVersion
@@ -259,15 +246,6 @@ private final class UpdateWindowModel: ObservableObject {
                     ))
                 }
             }
-        }
-    }
-
-    func automaticResult() async -> UpdateCheckResult? {
-        guard automaticUpdates else { return nil }
-        do {
-            return try await service.checkForUpdate()
-        } catch {
-            return nil
         }
     }
 
@@ -383,18 +361,6 @@ final class UpdateWindowController: NSWindowController, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
     }
 
-    func checkAutomatically() {
-        Task { @MainActor [weak self] in
-            guard let self,
-                  let result = await self.model.automaticResult(),
-                  case .available = result else { return }
-            self.show()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                self.model.present(result)
-            }
-        }
-    }
-
     func showDemoUpdate() {
         show()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [model] in
@@ -454,17 +420,6 @@ private struct VersionUpdateView: View {
             .buttonStyle(UpdateButtonStyle(primary: true))
             .disabled(model.isChecking)
 
-            Toggle(
-                L10n.text("自动更新", "Automatic updates"),
-                isOn: Binding(
-                    get: { model.automaticUpdates },
-                    set: { model.automaticUpdates = $0 }
-                )
-            )
-            .toggleStyle(.checkbox)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(UpdateTheme.text)
-            .padding(.top, 18)
             Spacer().frame(height: 34)
         }
         .frame(width: 500, height: 440)

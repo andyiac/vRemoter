@@ -341,10 +341,6 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 self?.updateWindow.show()
             }
-        } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
-                self?.updateWindow.checkAutomatically()
-            }
         }
     }
 
