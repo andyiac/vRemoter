@@ -60,11 +60,17 @@ final class ChromecastRemoteHIDBridge {
 
     private var manager: IOHIDManager?
     private var activeDevice: IOHIDDevice?
+    private var openRetryWorkItem: DispatchWorkItem?
+    private var openRetryDelay: TimeInterval = 0
     private var remappingEnabled = RemoteMappingStore.shared.isEnabled(.chromecast)
     private var lastButtonID: String?
 
     func start() {
         stop()
+        openManager()
+    }
+
+    private func openManager() {
         let manager = IOHIDManagerCreate(
             kCFAllocatorDefault,
             IOOptionBits(kIOHIDOptionsTypeNone)
@@ -116,13 +122,37 @@ final class ChromecastRemoteHIDBridge {
                 CFRunLoopGetMain(),
                 CFRunLoopMode.commonModes.rawValue
             )
+            // Usually kIOReturnExclusiveAccess while another process (or a
+            // stale connection) still owns the device. Retrying recovers
+            // without forcing the user to restart the app.
+            scheduleOpenRetry()
             return
         }
+        openRetryDelay = 0
         self.manager = manager
         print("[CAST-HID] waiting for Chromecast Remote")
     }
 
+    private func scheduleOpenRetry() {
+        openRetryWorkItem?.cancel()
+        openRetryDelay = min(openRetryDelay == 0 ? 1.0 : openRetryDelay * 2, 15.0)
+        print(
+            "[CAST-HID] will retry opening in " +
+            "\(Int(openRetryDelay.rounded()))s"
+        )
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.openRetryWorkItem = nil
+            self.openManager()
+        }
+        openRetryWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + openRetryDelay, execute: work)
+    }
+
     func stop() {
+        openRetryWorkItem?.cancel()
+        openRetryWorkItem = nil
+        openRetryDelay = 0
         activeDevice = nil
         lastButtonID = nil
         onConnectionChanged?(false)

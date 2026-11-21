@@ -44,6 +44,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var remoteStreaming = false
 
     private var lastVoiceRemote: VoiceRemoteID?
+    private var workspaceObservers: [NSObjectProtocol] = []
 
     private let x6 = X6HIDBridge()
     private let chromecastHID = ChromecastRemoteHIDBridge()
@@ -150,6 +151,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // X6 HID observation and ATVV audio are independent connections.
         x6.onConnectionChanged = { [weak self] connected in
             self?.x6HIDConnected = connected
+            if connected {
+                // The remote is awake and the system just re-established its
+                // HID link; recover ATVV immediately instead of waiting for
+                // the next backoff tick.
+                self?.x6BLE.kickReconnect()
+            }
             AppAnalytics.signal(
                 connected ? "Remote.HID.connected" : "Remote.HID.disconnected"
             )
@@ -159,6 +166,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // HID remains observation/search-suppression only; immediate voice
         // session control comes from AUDIO_START/AUDIO_STOP below.
         x6.onShortPress = { [weak self] in
+            self?.x6BLE.kickReconnect()
             self?.x6Session.remoteHIDShortPress()
         }
         x6.onLongPressEnded = { [weak self] in
@@ -220,6 +228,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         chromecastHID.onConnectionChanged = { [weak self] connected in
             self?.chromecastHIDConnected = connected
+            if connected {
+                // The system just reconnected the remote's HID link, so the
+                // device is awake; retry ATVV right away. This is the fastest
+                // way back after the remote's nightly idle disconnect.
+                self?.chromecastBLE.kickReconnect()
+            }
             AppAnalytics.signal(
                 connected
                     ? "Remote.Chromecast.HID.connected"
@@ -305,6 +319,31 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         x6Session.start()
         x6SearchSuppressor.start()
+        // BLE links often survive sleep in a half-open state. A clean
+        // reconnect on wake avoids "connected but voice does nothing".
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        workspaceObservers.append(
+            workspaceCenter.addObserver(
+                forName: NSWorkspace.didWakeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                print("[APP] 系统已唤醒，重新检查遥控器连接")
+                self?.x6BLE.handleSystemWake()
+                self?.chromecastBLE.handleSystemWake()
+            }
+        )
+        workspaceObservers.append(
+            workspaceCenter.addObserver(
+                forName: NSWorkspace.willSleepNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                print("[APP] 系统即将休眠，结束本地语音流")
+                self?.x6BLE.handleSystemSleep()
+                self?.chromecastBLE.handleSystemSleep()
+            }
+        )
         x6.start()
         x6BLE.start()
         chromecastHID.start()
@@ -808,6 +847,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        for observer in workspaceObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+        workspaceObservers.removeAll()
         x6.stop()
         chromecastHID.stop()
         x6SearchSuppressor.stop()

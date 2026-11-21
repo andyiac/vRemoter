@@ -57,6 +57,14 @@ final class BLEBridge: NSObject {
     private var capabilitiesRequested = false
     private var connectedPeripheralID: UUID?
     private var connectTimeout: DispatchWorkItem?
+    private var scanRetryTimer: Timer?
+    private var healthTimer: Timer?
+    private var capsRetryWorkItem: DispatchWorkItem?
+    private var reconnectAttempts = 0
+    private var nextReconnectAt = Date.distantPast
+    private var capsAttempts = 0
+    private var isScanning = false
+    private var lastAudioFrameAt = Date.distantPast
     private var pairingRequiredNotified = false
 
     private let protocolHandler = ATVVProtocol()
@@ -103,8 +111,10 @@ final class BLEBridge: NSObject {
 
     func start() {
         isStarted = true
+        reconnectAttempts = 0
+        nextReconnectAt = .distantPast
         if central.state == .poweredOn {
-            tryDirectConnect()
+            attemptConnection()
         } else {
             print("[\(logTag)] 等待蓝牙就绪…")
         }
@@ -114,7 +124,10 @@ final class BLEBridge: NSObject {
         isStarted = false
         closeTimeoutWorkItem?.cancel()
         closeTimeoutWorkItem = nil
+        cancelCapsRetry()
         stopKeepAliveTimer()
+        stopHealthTimer()
+        stopScanRetryTimer()
         if isStreaming {
             if let close = try? protocolHandler.micCloseCommand(streamID: streamID) {
                 writeCommand(close)
@@ -125,12 +138,15 @@ final class BLEBridge: NSObject {
         if let peripheral {
             central.cancelPeripheralConnection(peripheral)
         }
+        central.stopScan()
+        isScanning = false
         self.peripheral = nil
         audioChar = nil
         commandChar = nil
         controlChar = nil
         atvvCharsComplete = false
         capabilitiesRequested = false
+        capsAttempts = 0
     }
 
     func setRecordingEnabled(_ enabled: Bool) {
@@ -223,26 +239,91 @@ final class BLEBridge: NSObject {
         AppStorage.clearFiles(in: AppStorage.recordingsDirectory)
     }
 
-    /// If we have a saved UUID from a previous scan, ask CoreBluetooth for
-    /// the peripheral directly. This works even when the device is HID-paired
-    /// (advertisement scan returns nothing in that case).
-    private func tryDirectConnect() {
+    /// Public entry point for external wake-up signals (HID reconnect, voice
+    /// key press). Resets the backoff so a user action always gets an
+    /// immediate attempt instead of waiting out the retry delay.
+    func kickReconnect() {
+        guard isStarted else { return }
+        reconnectAttempts = 0
+        nextReconnectAt = .distantPast
+        // A link that is up (or a handshake already in flight) is handled by
+        // the capabilities watchdog and the health timer; do not tear it down
+        // just because the user pressed a key during negotiation.
+        guard connectedPeripheralID == nil, connectTimeout == nil else { return }
+        print("[\(logTag)] 收到唤醒信号，立即重连")
+        attemptConnection()
+        startScanRetryTimer()
+    }
+
+    /// Called after the Mac wakes from sleep. A BLE link can survive `sleep`
+    /// as "connected" while it is actually dead, so force a clean session.
+    func handleSystemWake() {
+        guard isStarted else { return }
+        print("[\(logTag)] 系统唤醒，检查遥控器连接")
+        reconnectAttempts = 0
+        nextReconnectAt = .distantPast
+        if connectedPeripheralID != nil {
+            recoverConnection(reason: "系统唤醒")
+        } else {
+            attemptConnection()
+            startScanRetryTimer()
+        }
+    }
+
+    func handleSystemSleep() {
+        guard isStarted else { return }
+        // Keep the BLE link: macOS may preserve it across sleep. Only settle
+        // any local stream state so the UI is not left showing "recording".
+        if isStreaming,
+           let close = try? protocolHandler.micCloseCommand(streamID: streamID) {
+            writeCommand(close)
+        }
+        finishAudioStreamLocally(reason: 0xFD)
+    }
+
+    /// One recovery attempt, biased toward peripherals that macOS can already
+    /// see. Scanning is the fallback because a HID-paired remote does not
+    /// advertise until its HID link is gone.
+    private func attemptConnection() {
+        guard isStarted, connectedPeripheralID == nil,
+              connectTimeout == nil else { return }
+        guard central.state == .poweredOn else {
+            print("[\(logTag)] 蓝牙未就绪，等待状态恢复")
+            return
+        }
         // Prefer the currently connected physical device over a persisted
         // UUID. This makes same-model replacement remotes work without
         // manually deleting x6-uuid.txt from the previous unit.
+        guard let known = knownPeripheral() else {
+            beginScan()
+            return
+        }
+        if known.fromSavedUUID {
+            print("[\(logTag)] 已存 UUID 直接 connect: \(known.peripheral.identifier)")
+        } else {
+            print(
+                "[\(logTag)] ATVV 已连接设备直接 connect: " +
+                "\(known.peripheral.name ?? "(no name)") \(known.peripheral.identifier)"
+            )
+        }
+        connect(
+            to: known.peripheral,
+            allowTimeoutFallback: known.fromSavedUUID
+        )
+    }
+
+    /// A device that macOS already holds a connection to (HID pairing) or
+    /// remembers from a previous run. Both cases are invisible to
+    /// `scanForPeripherals`, so they are the only way back after a timeout.
+    private func knownPeripheral() -> (peripheral: CBPeripheral, fromSavedUUID: Bool)? {
         let connected = central.retrieveConnectedPeripherals(
             withServices: [Self.serviceUUID]
         )
         if let candidate = connected.first(where: matches) {
-            print(
-                "[\(logTag)] ATVV 已连接设备直接 connect: " +
-                "\(candidate.name ?? "(no name)") \(candidate.identifier)"
-            )
-            connect(to: candidate)
-            return
+            return (candidate, false)
         }
 
-        if let uuidString = try? String(
+        guard let uuidString = try? String(
             contentsOfFile: savedUUIDPath,
             encoding: .utf8
         ),
@@ -251,25 +332,148 @@ final class BLEBridge: NSObject {
                     in: .whitespacesAndNewlines
                 )
             )
-        {
-            let known = central.retrievePeripherals(withIdentifiers: [uuid])
-            if let candidate = known.first, matches(candidate) {
-                print("[\(logTag)] 已存 UUID 直接 connect: \(candidate.identifier)")
-                connect(to: candidate, allowTimeoutFallback: true)
-                return
-            }
+        else {
+            return nil
         }
-
-        print("[\(logTag)] 无已存 UUID/ATVV 连接，转扫描")
-        beginScan()
+        let known = central.retrievePeripherals(withIdentifiers: [uuid])
+        if let candidate = known.first, matches(candidate) {
+            return (candidate, true)
+        }
+        return nil
     }
 
     private func beginScan() {
-        print("[\(logTag)] 扫描中（按名字 \(nameHint ?? "?") + ATVV service 过滤）")
-        central.scanForPeripherals(
-            withServices: nil,
-            options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
+        guard isStarted else { return }
+        if !isScanning {
+            print("[\(logTag)] 扫描中（按名字 \(nameHint ?? "?") + ATVV service 过滤）")
+            central.scanForPeripherals(
+                withServices: nil,
+                options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
+            )
+            isScanning = true
+        }
+        startScanRetryTimer()
+    }
+
+    /// Runs while disconnected. It covers the cases advertisement scans
+    /// cannot: a HID-paired remote stops advertising, and a saved UUID is
+    /// invisible to scanning until macOS wakes the device. It also rate-limits
+    /// direct attempts with exponential backoff so an absent remote does not
+    /// hammer the radio.
+    private func startScanRetryTimer() {
+        guard scanRetryTimer == nil else { return }
+        let timer = Timer(
+            timeInterval: 5.0,
+            repeats: true
+        ) { [weak self] _ in
+            self?.reconnectTick()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        scanRetryTimer = timer
+    }
+
+    private func stopScanRetryTimer() {
+        scanRetryTimer?.invalidate()
+        scanRetryTimer = nil
+    }
+
+    private func reconnectTick() {
+        guard isStarted, connectedPeripheralID == nil,
+              connectTimeout == nil else { return }
+        guard Date() >= nextReconnectAt else { return }
+        attemptConnection()
+    }
+
+    private func scheduleReconnect(after delay: TimeInterval) {
+        guard isStarted else { return }
+        nextReconnectAt = Date().addingTimeInterval(delay)
+        if connectedPeripheralID == nil, connectTimeout == nil {
+            beginScan()
+        }
+    }
+
+    private func noteConnectFailure(_ reason: String) {
+        reconnectAttempts += 1
+        let delay = min(5.0 * Double(reconnectAttempts), 30.0)
+        print(
+            "[\(logTag)] 连接失败（\(reason)），" +
+            "\(Int(delay.rounded())) 秒后重试（第 \(reconnectAttempts) 次）"
         )
+        scheduleReconnect(after: delay)
+    }
+
+    /// Tear down a link that is up but unusable (lost notifications or a dead
+    /// ATVV handshake) and start over. Without this a half-open link can look
+    /// connected forever while voice input silently does nothing.
+    private func recoverConnection(reason: String) {
+        print("[\(logTag)] \(reason)，重建连接")
+        cancelCapsRetry()
+        finishAudioStreamLocally(reason: 0xFB)
+        connectedPeripheralID = nil
+        connectTimeout?.cancel()
+        connectTimeout = nil
+        let oldPeripheral = peripheral
+        peripheral = nil
+        audioChar = nil
+        commandChar = nil
+        controlChar = nil
+        atvvCharsComplete = false
+        capabilitiesRequested = false
+        capsAttempts = 0
+        stopHealthTimer()
+        if let oldPeripheral {
+            central.cancelPeripheralConnection(oldPeripheral)
+        }
+        onConnectionChanged?(false)
+        reconnectAttempts = 0
+        // Give the pending cancellation time to reach the controller before
+        // reconnecting to the same identifier.
+        scheduleReconnect(after: 1.0)
+    }
+
+    private func startHealthTimer() {
+        stopHealthTimer()
+        let timer = Timer(
+            timeInterval: 20.0,
+            repeats: true
+        ) { [weak self] _ in
+            self?.checkConnectionHealth()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        healthTimer = timer
+    }
+
+    private func stopHealthTimer() {
+        healthTimer?.invalidate()
+        healthTimer = nil
+    }
+
+    private func checkConnectionHealth() {
+        guard isStarted, connectedPeripheralID != nil else { return }
+        guard let peripheral, peripheral.state == .connected else {
+            recoverConnection(reason: "健康检查发现连接已断开")
+            return
+        }
+        let controlReady = controlChar?.isNotifying == true
+        let commandReady = commandChar?.isNotifying == true
+        guard controlReady || commandReady else {
+            recoverConnection(reason: "健康检查发现通知通道失效")
+            return
+        }
+        checkStreamHealth()
+    }
+
+    /// A live ATVV stream sends a frame every 20–40 ms, even in silence. A
+    /// multi-second gap means the notification channel is dead even if
+    /// CoreBluetooth has not reported a disconnect.
+    private func checkStreamHealth() {
+        guard isStreaming else { return }
+        guard Date().timeIntervalSince(lastAudioFrameAt) > 6.0 else { return }
+        print("[\(logTag)] 语音流 6 秒无数据，结束本地流")
+        if let close = try? protocolHandler.micCloseCommand(streamID: streamID) {
+            writeCommand(close)
+        }
+        finishAudioStreamLocally(reason: 0xF9)
     }
 
     fileprivate func saveUUID(_ id: UUID) {
@@ -288,7 +492,10 @@ final class BLEBridge: NSObject {
         allowTimeoutFallback: Bool = false
     ) {
         guard matches(p) else { return }
+        guard connectedPeripheralID != p.identifier else { return }
         connectTimeout?.cancel()
+        stopScanRetryTimer()
+        isScanning = false
         peripheral = p
         connectedPeripheralID = nil
         p.delegate = self
@@ -299,19 +506,26 @@ final class BLEBridge: NSObject {
 
         // CoreBluetooth does not always deliver didFailToConnect, especially
         // when the peripheral still advertises but the bond is gone. Without a
-        // timeout the bridge can sit in "connecting" forever and never scan
-        // again, which looks like a dead remote in the UI.
+        // timeout the bridge can sit in "connecting" forever and never retry,
+        // which looks like a dead remote in the UI.
         let id = p.identifier
         let interval: TimeInterval = allowTimeoutFallback ? 4.0 : 6.0
         let work = DispatchWorkItem { [weak self, weak p] in
-            guard let self, self.isStarted, self.connectedPeripheralID != id else { return }
-            print("[\(self.logTag)] 连接超时，取消后重新扫描")
+            guard let self, self.isStarted,
+                  self.connectedPeripheralID != id,
+                  self.peripheral?.identifier == id else { return }
+            print("[\(self.logTag)] 连接超时")
             if let p {
                 self.central.cancelPeripheralConnection(p)
             }
             self.peripheral = nil
             self.connectTimeout = nil
-            self.beginScan()
+            self.audioChar = nil
+            self.commandChar = nil
+            self.controlChar = nil
+            self.atvvCharsComplete = false
+            self.capabilitiesRequested = false
+            self.noteConnectFailure("超时")
         }
         connectTimeout = work
         DispatchQueue.main.asyncAfter(deadline: .now() + interval, execute: work)
@@ -337,13 +551,6 @@ final class BLEBridge: NSObject {
             "\(nameHint ?? "遥控器")"
         )
         onPairingRequired?()
-    }
-
-    private func scheduleScan(after delay: TimeInterval) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self, self.isStarted else { return }
-            self.beginScan()
-        }
     }
 
     private func matches(_ candidate: CBPeripheral) -> Bool {
@@ -387,12 +594,15 @@ final class BLEBridge: NSObject {
     private var keepAliveTimer: Timer?
     private func startKeepAliveTimer() {
         stopKeepAliveTimer()
-        keepAliveTimer = Timer.scheduledTimer(
-            withTimeInterval: 4.0,
+        let timer = Timer(
+            timeInterval: 4.0,
             repeats: true
         ) { [weak self] _ in
             self?.sendKeepAlive()
+            self?.checkStreamHealth()
         }
+        RunLoop.main.add(timer, forMode: .common)
+        keepAliveTimer = timer
     }
     private func stopKeepAliveTimer() {
         keepAliveTimer?.invalidate()
@@ -428,6 +638,10 @@ final class BLEBridge: NSObject {
             print("[WAV] closed \(w.filename)")
             wavRecorder = nil
         }
+        // Only report a stream that actually existed. Remotes replay late
+        // AUDIO_STOP notifications, and logging a summary for every repeat
+        // buried the useful lines and rotated the log file prematurely.
+        guard wasStreaming else { return }
         let streamRMS = streamSampleCount > 0
             ? sqrt(Double(streamSumSquares) / Double(streamSampleCount))
             : 0
@@ -453,9 +667,26 @@ extension BLEBridge: CBCentralManagerDelegate {
         switch central.state {
         case .poweredOn:
             print("[\(logTag)] 蓝牙已就绪")
-            tryDirectConnect()
+            reconnectAttempts = 0
+            nextReconnectAt = .distantPast
+            attemptConnection()
         case .poweredOff:
             print("[\(logTag)] 蓝牙未开启")
+            cancelCapsRetry()
+            stopHealthTimer()
+            stopScanRetryTimer()
+            connectTimeout?.cancel()
+            connectTimeout = nil
+            isScanning = false
+            connectedPeripheralID = nil
+            peripheral = nil
+            audioChar = nil
+            commandChar = nil
+            controlChar = nil
+            atvvCharsComplete = false
+            capabilitiesRequested = false
+            finishAudioStreamLocally(reason: 0xFC)
+            onConnectionChanged?(false)
         default:
             break
         }
@@ -467,53 +698,91 @@ extension BLEBridge: CBCentralManagerDelegate {
                         rssi RSSI: NSNumber) {
         let n = peripheral.name ?? "(no name)"
         let services = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] ?? [])
-        let hasATVV = services.contains(Self.serviceUUID)
         let short = services.map { String($0.uuidString.prefix(8)) }
         // Match the configured device name as well as the shared ATVV service;
         // multiple voice remotes can advertise the same service UUID.
-        if matches(peripheral) {
-            print("[\(logTag)] 候选: \(n) (\(peripheral.identifier)), services=\(short), rssi=\(RSSI)")
-            connect(to: peripheral)
-        }
-        _ = hasATVV
+        guard matches(peripheral), connectedPeripheralID == nil,
+              connectTimeout == nil else { return }
+        print("[\(logTag)] 候选: \(n) (\(peripheral.identifier)), services=\(short), rssi=\(RSSI)")
+        reconnectAttempts = 0
+        nextReconnectAt = .distantPast
+        connect(to: peripheral)
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        // A late callback for a link we already abandoned; do not resurrect it.
+        guard self.peripheral?.identifier == peripheral.identifier else {
+            central.cancelPeripheralConnection(peripheral)
+            return
+        }
         connectTimeout?.cancel()
         connectTimeout = nil
         connectedPeripheralID = peripheral.identifier
+        isScanning = false
+        reconnectAttempts = 0
+        nextReconnectAt = .distantPast
         hasResetSessionForConnection = false
         pairingRequiredNotified = false
+        // Every GATT session needs its own subscriptions and capabilities
+        // handshake. Leaving these set from the previous session left the
+        // bridge "connected" with no negotiated codec after a reconnect.
+        audioChar = nil
+        commandChar = nil
+        controlChar = nil
+        atvvCharsComplete = false
+        capabilitiesRequested = false
+        capsAttempts = 0
         print("[\(logTag)] 已连接")
         onConnectionChanged?(true)
+        startHealthTimer()
         peripheral.discoverServices([Self.serviceUUID])
     }
 
     func centralManager(_ central: CBCentralManager,
                         didFailToConnect peripheral: CBPeripheral,
                         error: Error?) {
+        guard self.peripheral?.identifier == peripheral.identifier else { return }
         connectTimeout?.cancel()
         connectTimeout = nil
         connectedPeripheralID = nil
+        self.peripheral = nil
+        audioChar = nil
+        commandChar = nil
+        controlChar = nil
+        atvvCharsComplete = false
+        capabilitiesRequested = false
         print("[\(logTag)] 连接失败: \(error?.localizedDescription ?? "unknown")")
         let pairingLost = isPairingInformationLost(error)
         if pairingLost {
             notePairingInformationLost()
+            // Retrying immediately just spins through scan → connect → fail
+            // until the user re-pairs.
+            scheduleReconnect(after: 10)
+        } else {
+            noteConnectFailure(error?.localizedDescription ?? "unknown")
         }
         onConnectionChanged?(false)
-        // Back off after a bond failure: retrying immediately just spins
-        // through scan → connect → fail until the user re-pairs.
-        scheduleScan(after: pairingLost ? 10 : 0)
     }
 
     func centralManager(_ central: CBCentralManager,
                         didDisconnectPeripheral peripheral: CBPeripheral,
                         error: Error?) {
+        // Ignore disconnects from a peripheral that recoverConnection already
+        // replaced; otherwise it would cancel the fresh connection's state.
+        guard self.peripheral?.identifier == peripheral.identifier else { return }
         connectTimeout?.cancel()
         connectTimeout = nil
         closeTimeoutWorkItem?.cancel()
         closeTimeoutWorkItem = nil
+        cancelCapsRetry()
+        stopHealthTimer()
         connectedPeripheralID = nil
+        self.peripheral = nil
+        audioChar = nil
+        commandChar = nil
+        controlChar = nil
+        atvvCharsComplete = false
+        capabilitiesRequested = false
         print("[\(logTag)] 断开: \(error?.localizedDescription ?? "ok")")
         let pairingLost = isPairingInformationLost(error)
         if pairingLost {
@@ -521,7 +790,14 @@ extension BLEBridge: CBCentralManagerDelegate {
         }
         onConnectionChanged?(false)
         finishAudioStreamLocally(reason: 0xFC)
-        scheduleScan(after: pairingLost ? 10 : 2)
+        if pairingLost {
+            scheduleReconnect(after: 10)
+        } else {
+            // Usually the remote just went to sleep. Retry almost immediately;
+            // subsequent failures back off exponentially.
+            nextReconnectAt = Date().addingTimeInterval(1)
+            beginScan()
+        }
     }
 }
 
@@ -624,18 +900,56 @@ extension BLEBridge: CBPeripheralDelegate {
         maybeRequestCapabilities()
     }
 
-    /// Send the ATVV getCapabilities handshake exactly once, and only after a
-    /// characteristic that carries the reply is actively notifying. Sending it
-    /// right after setNotifyValue — while isNotifying is still false — drops the
-    /// reply and stalls negotiation ("尚未完成 ATVV capabilities 协商").
+    /// Start the ATVV getCapabilities handshake once a reply-bearing
+    /// characteristic is actually notifying. Sending it right after
+    /// setNotifyValue — while isNotifying is still false — drops the reply and
+    /// stalls negotiation ("尚未完成 ATVV capabilities 协商").
     private func maybeRequestCapabilities() {
         guard !capabilitiesRequested else { return }
         let controlReady = controlChar?.isNotifying == true
         let commandReady = commandChar?.isNotifying == true
         guard controlReady || commandReady else { return }
         capabilitiesRequested = true
-        writeCommand(protocolHandler.getCapabilitiesCommand)
-        print("[\(logTag)] TX getCapabilities")
+        capsAttempts = 0
+        sendCapabilitiesRequest()
+    }
+
+    /// The remote usually answers getCapabilities, but BLE notification loss
+    /// can swallow the reply. Retry a few times and then rebuild the link
+    /// instead of leaving the voice key dead until the app is restarted.
+    private func sendCapabilitiesRequest() {
+        capsAttempts += 1
+        guard writeCommand(protocolHandler.getCapabilitiesCommand) else {
+            recoverConnection(reason: "capabilities 无法发送")
+            return
+        }
+        print("[\(logTag)] TX getCapabilities (attempt \(capsAttempts))")
+        cancelCapsRetry()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.connectedPeripheralID != nil else { return }
+            if self.capsAttempts < 3 {
+                print(
+                    "[\(self.logTag)] capabilities 超时，" +
+                    "重发第 \(self.capsAttempts + 1) 次"
+                )
+                self.sendCapabilitiesRequest()
+            } else {
+                self.recoverConnection(reason: "capabilities 协商超时")
+            }
+        }
+        capsRetryWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0, execute: work)
+    }
+
+    private func cancelCapsRetry() {
+        capsRetryWorkItem?.cancel()
+        capsRetryWorkItem = nil
+    }
+
+    /// Capabilities negotiated: stop the retry chain and clear backoff.
+    private func noteCapabilitiesAccepted() {
+        cancelCapsRetry()
+        capsAttempts = 0
     }
 
     func peripheral(_ peripheral: CBPeripheral,
@@ -676,6 +990,7 @@ extension BLEBridge: CBPeripheralDelegate {
         case .capabilities(let caps):
             do {
                 try protocolHandler.acceptCapabilities(caps)
+                noteCapabilitiesAccepted()
                 print(
                     "[\(logTag)] caps ok v\(caps.version) " +
                     "codec=\(protocolHandler.codec!) " +
@@ -692,6 +1007,7 @@ extension BLEBridge: CBPeripheralDelegate {
             protocolHandler.beginAudioStream(codec: codec)
             streamID = sid
             isStreaming = true
+            lastAudioFrameAt = Date()
             notifyStreaming(true)
             onAudioStarted?(reason, codec.sampleRate)
             diagFrameCount = 0
@@ -770,6 +1086,7 @@ extension BLEBridge: CBPeripheralDelegate {
                 if let caps = ATVVProtocol.parseCapabilities(data) {
                     do {
                         try protocolHandler.acceptCapabilities(caps)
+                        noteCapabilitiesAccepted()
                         print(
                             "[\(logTag)] caps (fallback) v\(caps.version) " +
                             "codec=\(protocolHandler.codec!) " +
@@ -801,6 +1118,7 @@ extension BLEBridge: CBPeripheralDelegate {
     private func handleAudio(_ data: Data) {
         guard isStreaming, let frame = protocolHandler.decodeAudio(data) else { return }
         if frame.samples.isEmpty { return }
+        lastAudioFrameAt = Date()
         let framePeak = frame.samples.reduce(into: 0) {
             $0 = max($0, abs(Int($1)))
         }

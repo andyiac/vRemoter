@@ -72,6 +72,8 @@ final class X6HIDBridge {
 
     private var manager: IOHIDManager?
     private var activeDevice: IOHIDDevice?
+    private var openRetryWorkItem: DispatchWorkItem?
+    private var openRetryDelay: TimeInterval = 0
     private var lastConsumerUsage: UInt16 = 0
     private var voiceGestureActive = false
     private var longVoiceKeyActive = false
@@ -95,6 +97,10 @@ final class X6HIDBridge {
 
     func start() {
         stop()
+        openManager()
+    }
+
+    private func openManager() {
         let manager = IOHIDManagerCreate(
             kCFAllocatorDefault,
             IOOptionBits(kIOHIDOptionsTypeNone)
@@ -145,13 +151,33 @@ final class X6HIDBridge {
                 CFRunLoopGetMain(),
                 CFRunLoopMode.commonModes.rawValue
             )
+            // See ChromecastRemoteHIDBridge: retry instead of staying dead
+            // until the app restarts.
+            scheduleOpenRetry()
             return
         }
+        openRetryDelay = 0
         self.manager = manager
         print("[X6] HID probe started; waiting for X6-Remote")
     }
 
+    private func scheduleOpenRetry() {
+        openRetryWorkItem?.cancel()
+        openRetryDelay = min(openRetryDelay == 0 ? 1.0 : openRetryDelay * 2, 15.0)
+        print("[X6] will retry HID open in \(Int(openRetryDelay.rounded()))s")
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.openRetryWorkItem = nil
+            self.openManager()
+        }
+        openRetryWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + openRetryDelay, execute: work)
+    }
+
     func stop() {
+        openRetryWorkItem?.cancel()
+        openRetryWorkItem = nil
+        openRetryDelay = 0
         deferredVoiceRelease?.cancel()
         deferredVoiceRelease = nil
         longPressConfirmWorkItem?.cancel()

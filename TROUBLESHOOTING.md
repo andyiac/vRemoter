@@ -56,7 +56,14 @@ HID 管理器和 ATVV 抢同一个 BLE 设备，导致 GATT 通知丢失、CAPS 
 
 ### 修复
 
-**重启 vRemoter**（不是重启电脑）：
+当前未发布版本已改为自动恢复：`getCapabilities` 5 秒无响应会重发，连续 3 次失败会重建 BLE 连接；连接建立后每 20 秒做一次健康检查。日志中看到下面的重试记录属于正常自愈，不需要手动操作：
+
+```text
+[CAST-BLE] capabilities 超时，重发第 2 次
+[CAST-BLE] capabilities 协商超时，重建连接
+```
+
+旧版本（1.1.1 及更早）没有这个重试，遇到同样问题时仍需**重启 vRemoter**（不是重启电脑）：
 
 - 菜单栏 vRemoter 图标 → `控制台` → `重启 App`
 - 或命令行：`pkill -x vRemote && open -a /Applications/vRemote.app`
