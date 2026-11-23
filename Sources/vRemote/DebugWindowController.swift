@@ -253,6 +253,7 @@ private enum ConsoleModal: Identifiable {
 private enum ConsolePage: String, CaseIterable, Identifiable {
     case mixer
     case mapping
+    case battery
 
     var id: String { rawValue }
 
@@ -260,6 +261,7 @@ private enum ConsolePage: String, CaseIterable, Identifiable {
         switch self {
         case .mixer: L10n.text("音频", "Audio")
         case .mapping: L10n.text("按键映射", "Key Mapping")
+        case .battery: L10n.text("电量", "Battery")
         }
     }
 
@@ -267,6 +269,7 @@ private enum ConsolePage: String, CaseIterable, Identifiable {
         switch self {
         case .mixer: "slider.horizontal.3"
         case .mapping: "keyboard"
+        case .battery: "battery.100"
         }
     }
 }
@@ -293,6 +296,8 @@ private final class ConsoleViewModel: ObservableObject {
     @Published var bluetoothGranted = false
     @Published var x6Connected = false
     @Published var chromecastConnected = false
+    @Published var x6BatteryPercent: Int?
+    @Published var chromecastBatteryPercent: Int?
     @Published var pairingRequired = false
     @Published var inputMethodTarget = AppStorage.inputMethodTarget
     @Published var inputTriggerKey = AppStorage.effectiveInputTriggerKey
@@ -613,6 +618,16 @@ final class DebugWindowController: NSWindowController, NSWindowDelegate {
         DispatchQueue.main.async { [weak self] in self?.model.observeRemoteLevel(db) }
     }
 
+    func updateRemoteBattery(_ percent: Int?, remote: VoiceRemoteID) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            switch remote {
+            case .x6: self.model.x6BatteryPercent = percent
+            case .chromecast: self.model.chromecastBatteryPercent = percent
+            }
+        }
+    }
+
     func showDonation() {
         model.showDonation()
         show()
@@ -654,9 +669,13 @@ private struct StudioMixerView: View {
                 Spacer().frame(height: 17)
                 statusPanel
                     .frame(height: 230)
-            } else {
+            } else if model.selectedPage == .mapping {
                 Spacer().frame(height: 15)
                 KeyMappingView(model: model)
+                    .frame(height: 535)
+            } else {
+                Spacer().frame(height: 15)
+                BatteryHistoryView()
                     .frame(height: 535)
             }
         }
@@ -706,7 +725,7 @@ private struct StudioMixerView: View {
                     .foregroundStyle(ConsoleTheme.secondary)
             }
             ConsolePageSelector(selection: $model.selectedPage)
-                .frame(width: 202)
+                .frame(width: 272)
             Spacer()
             HStack(spacing: 7) {
                 Circle()
@@ -838,6 +857,13 @@ private struct StudioMixerView: View {
                 onAction: { model.activeModal = .permission(.bluetooth) }
             )
             StatusRow(
+                title: L10n.text("遥控器电量", "Remote battery"),
+                value: batteryValue,
+                tone: batteryTone,
+                action: nil,
+                onAction: {}
+            )
+            StatusRow(
                 title: L10n.text("麦克风权限", "Microphone"),
                 value: model.microphoneGranted
                     ? L10n.text("已授权", "Granted")
@@ -869,6 +895,34 @@ private struct StudioMixerView: View {
         .background(panelBackground(ConsoleTheme.surface, radius: 19))
     }
 
+    private var batteryValue: String {
+        var known: [String] = []
+        if let percent = model.x6BatteryPercent {
+            known.append("X6 \(percent)%")
+        }
+        if let percent = model.chromecastBatteryPercent {
+            known.append("Chromecast \(percent)%")
+        }
+        guard !known.isEmpty else {
+            return model.bleConnected
+                ? L10n.text("未读取到", "Not available")
+                : L10n.text("未连接", "Not connected")
+        }
+        let text = known.joined(separator: " · ")
+        return model.bleConnected
+            ? text
+            : L10n.text("\(text) · 上次", "\(text) · last seen")
+    }
+
+    private var batteryTone: StatusTone {
+        let values = [
+            model.x6BatteryPercent,
+            model.chromecastBatteryPercent
+        ].compactMap { $0 }
+        if values.isEmpty { return .warning }
+        return values.contains(where: { $0 <= 20 }) ? .warning : .good
+    }
+
     private var x6Value: String {
         if model.hidConnected && model.bleConnected {
             return model.remoteStreaming
@@ -885,6 +939,338 @@ private struct StudioMixerView: View {
             )
         }
         return L10n.text("HID 与 BLE 未连接", "HID and BLE disconnected")
+    }
+}
+
+private enum BatteryRange: String, CaseIterable, Identifiable {
+    case day
+    case week
+    case month
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .day: L10n.text("24 小时", "24 hours")
+        case .week: L10n.text("7 天", "7 days")
+        case .month: L10n.text("30 天", "30 days")
+        }
+    }
+
+    var duration: TimeInterval {
+        switch self {
+        case .day: 24 * 60 * 60
+        case .week: 7 * 24 * 60 * 60
+        case .month: 30 * 24 * 60 * 60
+        }
+    }
+}
+
+private struct BatteryHistoryView: View {
+    @ObservedObject private var store = BatteryHistoryStore.shared
+    @State private var range: BatteryRange = .day
+    @State private var remote: VoiceRemoteID = .chromecast
+
+    private var end: Date { Date() }
+    private var start: Date { end.addingTimeInterval(-range.duration) }
+
+    private var visibleSamples: [BatterySample] {
+        store.samples(for: remote)
+            .filter { $0.timestamp >= start }
+            .sorted { $0.timestamp < $1.timestamp }
+    }
+
+    private var remoteTitle: String {
+        remote == .chromecast ? "Chromecast Remote" : "X6 Remote"
+    }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            toolbar
+            chartPanel
+            statsRow
+        }
+    }
+
+    private var toolbar: some View {
+        HStack(spacing: 10) {
+            SegmentedPill(
+                items: VoiceRemoteID.allCases,
+                selection: $remote,
+                title: { $0 == .chromecast ? "Chromecast" : "X6" }
+            )
+            Spacer()
+            SegmentedPill(
+                items: BatteryRange.allCases,
+                selection: $range,
+                title: { $0.title }
+            )
+        }
+        .frame(height: 32)
+    }
+
+    private var chartPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(remoteTitle)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(ConsoleTheme.text)
+                    Text(L10n.text(
+                        "\(range.title) · 每 10 分钟记录一次",
+                        "\(range.title) · sampled every 10 minutes"
+                    ))
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(ConsoleTheme.tertiary)
+                }
+                Spacer(minLength: 8)
+                if let latest = visibleSamples.last {
+                    Text("\(latest.percent)%")
+                        .font(.system(size: 30, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(latest.percent <= 20 ? ConsoleTheme.amber : ConsoleTheme.green)
+                }
+            }
+            ZStack {
+                if visibleSamples.count >= 2 {
+                    BatteryCurveView(
+                        samples: visibleSamples,
+                        start: start,
+                        end: end,
+                        range: range
+                    )
+                } else {
+                    VStack(spacing: 6) {
+                        Image(systemName: "battery.100")
+                            .font(.system(size: 20, weight: .medium))
+                            .foregroundStyle(ConsoleTheme.tertiary)
+                        Text(L10n.text(
+                            "这个区间还没有电量记录",
+                            "No battery readings in this range"
+                        ))
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(ConsoleTheme.secondary)
+                        Text(L10n.text(
+                            "vRemoter 运行期间每 10 分钟记录一次",
+                            "Recorded every 10 minutes while vRemoter is running"
+                        ))
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(ConsoleTheme.tertiary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .padding(16)
+        .frame(height: 400)
+        .background(panelBackground(ConsoleTheme.surface, radius: 19))
+    }
+
+    private var statsRow: some View {
+        HStack(spacing: 10) {
+            statCard(L10n.text("当前", "Current"), latestText)
+            statCard(L10n.text("最高", "Peak"), peakText)
+            statCard(L10n.text("最低", "Low"), lowText)
+            statCard(L10n.text("区间变化", "Change"), changeText)
+        }
+        .frame(height: 79)
+    }
+
+    private var latestText: String {
+        visibleSamples.last.map { "\($0.percent)%" } ?? "—"
+    }
+
+    private var peakText: String {
+        visibleSamples.map(\.percent).max().map { "\($0)%" } ?? "—"
+    }
+
+    private var lowText: String {
+        visibleSamples.map(\.percent).min().map { "\($0)%" } ?? "—"
+    }
+
+    private var changeText: String {
+        guard let first = visibleSamples.first,
+              let last = visibleSamples.last else { return "—" }
+        let delta = last.percent - first.percent
+        return delta > 0 ? "+\(delta)%" : "\(delta)%"
+    }
+
+    private func statCard(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(ConsoleTheme.tertiary)
+            Text(value)
+                .font(.system(size: 19, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(ConsoleTheme.text)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 13)
+        .padding(.top, 11)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(panelBackground(ConsoleTheme.surface2, radius: 14))
+    }
+}
+
+private struct SegmentedPill<Item: Hashable>: View {
+    let items: [Item]
+    @Binding var selection: Item
+    let title: (Item) -> String
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(items, id: \.self) { item in
+                Button {
+                    selection = item
+                } label: {
+                    Text(title(item))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(
+                            selection == item
+                                ? ConsoleTheme.text
+                                : ConsoleTheme.secondary
+                        )
+                        .padding(.horizontal, 11)
+                        .frame(height: 26)
+                        .background(
+                            selection == item
+                                ? ConsoleTheme.surface2
+                                : Color.clear
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 7))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .background(ConsoleTheme.black.opacity(0.72))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+private struct BatteryCurveView: View {
+    let samples: [BatterySample]
+    let start: Date
+    let end: Date
+    let range: BatteryRange
+
+    private var sorted: [BatterySample] {
+        samples.sorted { $0.timestamp < $1.timestamp }
+    }
+
+    var body: some View {
+        Canvas { context, size in
+            let leading: CGFloat = 32
+            let trailing: CGFloat = 8
+            let top: CGFloat = 8
+            let bottom: CGFloat = 18
+            let plot = CGRect(
+                x: leading,
+                y: top,
+                width: max(1, size.width - leading - trailing),
+                height: max(1, size.height - top - bottom)
+            )
+            let span = end.timeIntervalSince(start)
+            guard span > 0 else { return }
+
+            for level in stride(from: 0, through: 100, by: 25) {
+                let y = plot.maxY - plot.height * CGFloat(level) / 100
+                var line = Path()
+                line.move(to: CGPoint(x: plot.minX, y: y))
+                line.addLine(to: CGPoint(x: plot.maxX, y: y))
+                context.stroke(
+                    line,
+                    with: .color(ConsoleTheme.lineSoft),
+                    style: StrokeStyle(
+                        lineWidth: 1,
+                        dash: (level == 0 || level == 100) ? [] : [3, 3]
+                    )
+                )
+                let label = context.resolve(
+                    Text("\(level)%")
+                        .font(.system(size: 8.5, weight: .medium))
+                        .foregroundColor(ConsoleTheme.tertiary)
+                )
+                context.draw(
+                    label,
+                    at: CGPoint(x: plot.minX - 6, y: y),
+                    anchor: .trailing
+                )
+            }
+
+            let ticks = [start, start.addingTimeInterval(span / 2), end]
+            for (index, tick) in ticks.enumerated() {
+                let x = plot.minX + plot.width * CGFloat(index) / 2
+                let label = context.resolve(
+                    Text(Self.label(for: tick, range: range))
+                        .font(.system(size: 8.5, weight: .medium))
+                        .foregroundColor(ConsoleTheme.tertiary)
+                )
+                context.draw(
+                    label,
+                    at: CGPoint(x: x, y: plot.maxY + 9),
+                    anchor: .center
+                )
+            }
+
+            let points: [(Date, CGPoint)] = sorted.map { sample in
+                let fraction = sample.timestamp.timeIntervalSince(start) / span
+                let x = plot.minX + plot.width * CGFloat(min(max(fraction, 0), 1))
+                let y = plot.maxY - plot.height * CGFloat(sample.percent) / 100
+                return (sample.timestamp, CGPoint(x: x, y: y))
+            }
+
+            var segments: [[CGPoint]] = []
+            var current: [CGPoint] = []
+            var previous: Date?
+            for (date, point) in points {
+                if let previous, date.timeIntervalSince(previous) > 2 * 3600 {
+                    if !current.isEmpty { segments.append(current) }
+                    current = []
+                }
+                current.append(point)
+                previous = date
+            }
+            if !current.isEmpty { segments.append(current) }
+
+            for segment in segments where segment.count >= 2 {
+                var area = Path()
+                area.addLines(segment)
+                area.addLine(to: CGPoint(x: segment[segment.count - 1].x, y: plot.maxY))
+                area.addLine(to: CGPoint(x: segment[0].x, y: plot.maxY))
+                area.closeSubpath()
+                context.fill(area, with: .color(ConsoleTheme.green.opacity(0.10)))
+
+                var line = Path()
+                line.addLines(segment)
+                context.stroke(
+                    line,
+                    with: .color(ConsoleTheme.green),
+                    style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)
+                )
+            }
+
+            if points.count <= 80 {
+                for (_, point) in points {
+                    let dot = Path(ellipseIn: CGRect(
+                        x: point.x - 2.2,
+                        y: point.y - 2.2,
+                        width: 4.4,
+                        height: 4.4
+                    ))
+                    context.fill(dot, with: .color(ConsoleTheme.green))
+                }
+            }
+        }
+    }
+
+    private static func label(for date: Date, range: BatteryRange) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.dateFormat = range == .day ? "HH:mm" : "M/d"
+        return formatter.string(from: date)
     }
 }
 

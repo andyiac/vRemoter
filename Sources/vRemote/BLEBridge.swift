@@ -18,6 +18,11 @@ final class BLEBridge: NSObject {
     static let audioUUID    = CBUUID(string: "AB5E0003-5A21-4F05-BC7D-AF01F617B664")  // remote sends voice data to host (notify)
     static let controlUUID  = CBUUID(string: "AB5E0004-5A21-4F05-BC7D-AF01F617B664")  // control events from remote
 
+    // Standard GATT Battery Service. The remote advertises 0x180F; the level
+    // itself is an optional read, so absence must not affect ATVV setup.
+    static let batteryServiceUUID = CBUUID(string: "180F")
+    static let batteryLevelUUID   = CBUUID(string: "2A19")
+
     // This V2 bridge owns one X6 ATVV connection.
     private let nameHint: String?
     private let savedUUIDPath: String
@@ -46,6 +51,9 @@ final class BLEBridge: NSObject {
     var onPairingRequired: (() -> Void)?
     /// Audio level meter update; arg is dBFS in [-60, 0].
     var onLevel: ((Double, Int /* peak */) -> Void)?
+    /// Remote battery percentage from the standard Battery Service, or nil
+    /// when the remote does not expose it.
+    var onBatteryLevel: ((Int?) -> Void)?
 
     private var central: CBCentralManager!
     private var isStarted = false
@@ -90,6 +98,10 @@ final class BLEBridge: NSObject {
     private var lastMicOpenAt = Date.distantPast
     private var closeTimeoutWorkItem: DispatchWorkItem?
     private var hasResetSessionForConnection = false
+    private var batteryChar: CBCharacteristic?
+    private var batteryDiscoveryPending = false
+    private var batteryDiscoveryFinished = false
+    private var lastBatteryReadAt = Date.distantPast
 
     init(
         nameHint: String?,
@@ -417,6 +429,7 @@ final class BLEBridge: NSObject {
         audioChar = nil
         commandChar = nil
         controlChar = nil
+        resetBatteryState()
         atvvCharsComplete = false
         capabilitiesRequested = false
         capsAttempts = 0
@@ -461,6 +474,7 @@ final class BLEBridge: NSObject {
             return
         }
         checkStreamHealth()
+        requestBatteryLevel()
     }
 
     /// A live ATVV stream sends a frame every 20–40 ms, even in silence. A
@@ -474,6 +488,43 @@ final class BLEBridge: NSObject {
             writeCommand(close)
         }
         finishAudioStreamLocally(reason: 0xF9)
+    }
+
+    // MARK: - Battery Service
+
+    /// Read the standard Battery Service level. 0x180F is optional and some
+    /// remotes only put it in the advertisement, so every failure path stays
+    /// quiet and simply reports "unavailable" to the UI.
+    private func requestBatteryLevel(force: Bool = false) {
+        guard let peripheral, peripheral.state == .connected else { return }
+        if !force, Date().timeIntervalSince(lastBatteryReadAt) < 600 { return }
+        if batteryChar != nil {
+            readBatteryLevel()
+            return
+        }
+        if let service = peripheral.services?.first(
+            where: { $0.uuid == Self.batteryServiceUUID }
+        ) {
+            peripheral.discoverCharacteristics([Self.batteryLevelUUID], for: service)
+            return
+        }
+        guard !batteryDiscoveryPending, !batteryDiscoveryFinished else { return }
+        batteryDiscoveryPending = true
+        print("[\(logTag)] 查询电量服务 180F")
+        peripheral.discoverServices([Self.batteryServiceUUID])
+    }
+
+    private func readBatteryLevel() {
+        guard let peripheral, let batteryChar else { return }
+        lastBatteryReadAt = Date()
+        peripheral.readValue(for: batteryChar)
+    }
+
+    private func resetBatteryState() {
+        batteryChar = nil
+        batteryDiscoveryPending = false
+        batteryDiscoveryFinished = false
+        lastBatteryReadAt = .distantPast
     }
 
     fileprivate func saveUUID(_ id: UUID) {
@@ -498,6 +549,7 @@ final class BLEBridge: NSObject {
         isScanning = false
         peripheral = p
         connectedPeripheralID = nil
+        resetBatteryState()
         p.delegate = self
         central.stopScan()
         central.connect(p, options: nil)
@@ -749,6 +801,7 @@ extension BLEBridge: CBCentralManagerDelegate {
         audioChar = nil
         commandChar = nil
         controlChar = nil
+        resetBatteryState()
         atvvCharsComplete = false
         capabilitiesRequested = false
         print("[\(logTag)] 连接失败: \(error?.localizedDescription ?? "unknown")")
@@ -781,6 +834,7 @@ extension BLEBridge: CBCentralManagerDelegate {
         audioChar = nil
         commandChar = nil
         controlChar = nil
+        resetBatteryState()
         atvvCharsComplete = false
         capabilitiesRequested = false
         print("[\(logTag)] 断开: \(error?.localizedDescription ?? "ok")")
@@ -807,6 +861,31 @@ extension BLEBridge: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard error == nil, let services = peripheral.services else {
             print("[\(logTag)] 服务发现失败: \(error?.localizedDescription ?? "?")")
+            if batteryDiscoveryPending {
+                batteryDiscoveryPending = false
+                batteryDiscoveryFinished = true
+                print("[\(logTag)] 遥控器未提供电池服务")
+                onBatteryLevel?(nil)
+            }
+            return
+        }
+        // The second, filtered discovery only asks for 0x180F; ATVV is already
+        // wired up by then, so do not redo that work.
+        if batteryDiscoveryPending {
+            batteryDiscoveryPending = false
+            batteryDiscoveryFinished = true
+            if let battery = services.first(
+                where: { $0.uuid == Self.batteryServiceUUID }
+            ) {
+                print("[\(logTag)] 发现电池服务 180F")
+                peripheral.discoverCharacteristics(
+                    [Self.batteryLevelUUID],
+                    for: battery
+                )
+            } else {
+                print("[\(logTag)] 遥控器未提供电池服务")
+                onBatteryLevel?(nil)
+            }
             return
         }
         print("[\(logTag)] 发现 \(services.count) 个 service")
@@ -850,6 +929,10 @@ extension BLEBridge: CBPeripheralDelegate {
                 peripheral.setNotifyValue(true, for: c)
                 print("[\(logTag)]   → control subscribed; isNotifying=\(c.isNotifying)")
                 if isATVV { atvvCharsComplete = true }
+            case Self.batteryLevelUUID:
+                batteryChar = c
+                print("[\(logTag)]   → 电量特征已就绪")
+                readBatteryLevel()
             default:
                 // Auto-subscribe to any notify-capable characteristic on this
                 // service — we may find button events on HOGP here.
@@ -970,6 +1053,11 @@ extension BLEBridge: CBPeripheralDelegate {
             handleControl(data)
         case Self.audioUUID:
             handleAudio(data)
+        case Self.batteryLevelUUID:
+            if let raw = data.first, raw <= 100 {
+                print("[\(logTag)] 遥控器电量 \(raw)%")
+                onBatteryLevel?(Int(raw))
+            }
         default:
             print("[\(logTag)] unexpected char update \(characteristic.uuid.uuidString.prefix(8)), \(len)B")
         }
@@ -998,6 +1086,7 @@ extension BLEBridge: CBPeripheralDelegate {
                     "frame=\(caps.frameSize)"
                 )
                 resetStaleSessionIfNeeded()
+                requestBatteryLevel(force: true)
             } catch {
                 print("[\(logTag)] caps error: \(error.localizedDescription)")
             }

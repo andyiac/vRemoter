@@ -226,6 +226,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard AudioPipe.shared.isRemoteInputEnabled else { return }
             self?.debugWindow.updateRemoteLevel(db)
         }
+        x6BLE.onBatteryLevel = { [weak self] percent in
+            if let percent {
+                BatteryHistoryStore.shared.record(percent, remote: .x6)
+            }
+            self?.debugWindow.updateRemoteBattery(percent, remote: .x6)
+        }
         chromecastHID.onConnectionChanged = { [weak self] connected in
             self?.chromecastHIDConnected = connected
             if connected {
@@ -295,6 +301,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         chromecastBLE.onLevel = { [weak self] db, _ in
             guard AudioPipe.shared.isRemoteInputEnabled else { return }
             self?.debugWindow.updateRemoteLevel(db)
+        }
+        chromecastBLE.onBatteryLevel = { [weak self] percent in
+            if let percent {
+                BatteryHistoryStore.shared.record(percent, remote: .chromecast)
+            }
+            self?.debugWindow.updateRemoteBattery(percent, remote: .chromecast)
         }
         x6Session.preferredRemoteProvider = { [weak self] in
             self?.preferredVoiceRemote()
